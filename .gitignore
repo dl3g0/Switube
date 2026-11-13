@@ -1,0 +1,46 @@
+# Build trees and compiler output
+/build/
+/build_*/
+/dist_*/
+/staging_*/
+/Switube-Complete-SD/
+/phase2/build/
+/phase2/build_*/
+/phase2/dist/
+/phase2/dist_*/
+/phase2/overlay/build/
+/phase2/overlay/build_*/
+/phase2/sysmodule/build/
+*.elf
+*.nro
+*.nso
+*.nsp
+*.ovl
+*.nacp
+*.npdm
+*.map
+*.o
+*.d
+
+# Generated release packages
+/release/
+/phase2/Switube-Phase2-*/
+/phase2/Switube-Phase2-*.zip
+*.zip
+
+# Runtime diagnostics and user-private state
+/logs/
+*.log
+*.log.previous
+config.json
+downloads.json
+/downloads/
+artwork-cache/
+
+# Editor and OS metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.user
+*.suo
