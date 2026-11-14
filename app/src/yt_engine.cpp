@@ -30,6 +30,16 @@ std::string findLocalAudioTrack(const std::string& trackId) {
   }
   return "";
 }
+
+std::string findLocalTrackImage(const std::string& trackId) {
+  if (trackId.empty()) return "";
+  std::string p = std::string(CONFIG_DIR) + "/downloads/" + trackId + ".jpg";
+  struct stat st{};
+  if (stat(p.c_str(), &st) == 0 && st.st_size > 0) return p;
+  std::string sp = std::string("sdmc:") + p;
+  if (stat(sp.c_str(), &st) == 0 && st.st_size > 0) return sp;
+  return "";
+}
 }
 
 YtEngine& YtEngine::getInstance() {
@@ -167,11 +177,12 @@ void YtEngine::playQueue(const std::vector<YtTrack>& tracks, size_t startIndex) 
     const auto& current = queue_[currentQueueIndex_];
 
     trackId = current.id;
+    std::string localImg = findLocalTrackImage(current.id);
     nowPlaying_.id = current.id;
     nowPlaying_.title = current.title;
     nowPlaying_.artist = current.artist;
     nowPlaying_.album = current.album;
-    nowPlaying_.imageUrl = current.imageUrl;
+    nowPlaying_.imageUrl = !localImg.empty() ? localImg : current.imageUrl;
     nowPlaying_.durationMs = current.durationMs;
     nowPlaying_.positionMs = 0;
     nowPlaying_.isFavorite = isFavorite(current.id);

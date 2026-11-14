@@ -103,15 +103,17 @@ int64_t AvioSeek(void* opaque, int64_t offset, int whence) {
   // Si FFmpeg recibe el tamaño total, asume que es un archivo estático indexado e intenta
   // hacer seek al final del buffer buscando Cues/Index, alcanzando EOF prematuramente y
   // deteniendo la reproducción a los pocos segundos. Devolver -1 garantiza reproducción secuencial fluida.
-  if (whence == AVSEEK_SIZE) {
+  if (whence & AVSEEK_SIZE) {
     return -1;
   }
 
+  int baseWhence = whence & ~AVSEEK_FORCE;
+
   if (reader->localFp) {
-    if (whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) {
+    if (baseWhence != SEEK_SET && baseWhence != SEEK_CUR && baseWhence != SEEK_END) {
       return -1;
     }
-    if (fseek(reader->localFp, static_cast<long>(offset), whence) != 0) {
+    if (fseek(reader->localFp, static_cast<long>(offset), baseWhence) != 0) {
       return -1;
     }
     long pos = ftell(reader->localFp);
@@ -121,17 +123,20 @@ int64_t AvioSeek(void* opaque, int64_t offset, int whence) {
   }
 
   int64_t newPos = 0;
-  if (whence == SEEK_SET) {
+  if (baseWhence == SEEK_SET) {
     newPos = offset;
-  } else if (whence == SEEK_CUR) {
+  } else if (baseWhence == SEEK_CUR) {
     newPos = static_cast<int64_t>(reader->readPos) + offset;
-  } else if (whence == SEEK_END) {
+  } else if (baseWhence == SEEK_END) {
     newPos = static_cast<int64_t>(reader->buffer.size()) + offset;
   } else {
     return -1;
   }
 
   if (newPos < 0) return -1;
+  if (!reader->isDownloading.load() && static_cast<size_t>(newPos) > reader->buffer.size()) {
+    newPos = static_cast<int64_t>(reader->buffer.size());
+  }
   reader->readPos = static_cast<size_t>(newPos);
   return reader->readPos;
 }
@@ -528,15 +533,23 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
   // Configurar SwrContext para remuestrear a 48000 Hz, S16 estéreo
   SwrContext* swrCtx = nullptr;
   AVChannelLayout outChLayout = AV_CHANNEL_LAYOUT_STEREO;
-  if (swr_alloc_set_opts2(&swrCtx,
-                          &outChLayout,
-                          AV_SAMPLE_FMT_S16,
-                          48000,
-                          &codecCtx->ch_layout,
-                          codecCtx->sample_fmt,
-                          codecCtx->sample_rate,
-                          0, nullptr) < 0 ||
-      !swrCtx || swr_init(swrCtx) < 0) {
+  AVChannelLayout inChLayout = {};
+  if (codecCtx->ch_layout.order != AV_CHANNEL_ORDER_UNSPEC && codecCtx->ch_layout.nb_channels > 0) {
+    av_channel_layout_copy(&inChLayout, &codecCtx->ch_layout);
+  } else {
+    int channels = codecCtx->ch_layout.nb_channels > 0 ? codecCtx->ch_layout.nb_channels : 2;
+    av_channel_layout_default(&inChLayout, channels);
+  }
+  int swrAllocRet = swr_alloc_set_opts2(&swrCtx,
+                                        &outChLayout,
+                                        AV_SAMPLE_FMT_S16,
+                                        48000,
+                                        &inChLayout,
+                                        codecCtx->sample_fmt,
+                                        codecCtx->sample_rate,
+                                        0, nullptr);
+  av_channel_layout_uninit(&inChLayout);
+  if (swrAllocRet < 0 || !swrCtx || swr_init(swrCtx) < 0) {
     nxlog::push("YtAudioPlayer error: swr_init failed");
     if (swrCtx) swr_free(&swrCtx);
     avcodec_free_context(&codecCtx);
@@ -617,10 +630,13 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
           if (stopToken->load()) break;
 
           uint8_t* outPtr = pcmOut.data();
+          const uint8_t** inData = frame->extended_data
+                                       ? const_cast<const uint8_t**>(frame->extended_data)
+                                       : const_cast<const uint8_t**>(frame->data);
           int outSamples = swr_convert(swrCtx,
                                        &outPtr,
                                        MAX_OUT_SAMPLES,
-                                       (const uint8_t**)frame->data,
+                                       inData,
                                        frame->nb_samples);
           if (outSamples > 0 && !stopToken->load()) {
             if (!firstFrameNotified) {

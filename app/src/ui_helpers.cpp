@@ -1,15 +1,16 @@
-#include <regex>
 #include "ui_helpers.hpp"
 #include "download_manager.hpp"
 #include "i18n.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <deque>
 #include <fstream>
 #include <mutex>
+#include <pthread.h>
 #include <queue>
 #include <thread>
 #include <unordered_map>
@@ -264,8 +265,16 @@ void storeMemoryImageLocked(const std::string& url, const std::string& data) {
 class ImageWorkerPool {
  public:
   ImageWorkerPool() {
-    for (int index = 0; index < 2; ++index)
-      workers.emplace_back([this] { run(); });
+    for (int index = 0; index < 2; ++index) {
+      pthread_t pt{};
+      pthread_attr_t attr;
+      pthread_attr_init(&attr);
+      pthread_attr_setstacksize(&attr, 512 * 1024);
+      if (pthread_create(&pt, &attr, &ImageWorkerPool::threadEntry, this) == 0) {
+        workers.push_back(pt);
+      }
+      pthread_attr_destroy(&attr);
+    }
   }
 
   void submit(std::function<void()> task) {
@@ -287,12 +296,17 @@ class ImageWorkerPool {
     }
     wake.notify_all();
     for (auto& worker : workers) {
-      if (worker.joinable()) worker.join();
+      pthread_join(worker, nullptr);
     }
     workers.clear();
   }
 
  private:
+  static void* threadEntry(void* arg) {
+    static_cast<ImageWorkerPool*>(arg)->run();
+    return nullptr;
+  }
+
   void run() {
     while (true) {
       std::function<void()> task;
@@ -303,14 +317,20 @@ class ImageWorkerPool {
         task = std::move(tasks.front());
         tasks.pop();
       }
-      task();
+      try {
+        if (task) task();
+      } catch (const std::exception& e) {
+        nxlog::pushf("ImageWorkerPool exception: %s", e.what());
+      } catch (...) {
+        nxlog::push("ImageWorkerPool unknown exception");
+      }
     }
   }
 
   std::mutex mutex;
   std::condition_variable wake;
   std::queue<std::function<void()>> tasks;
-  std::vector<std::thread> workers;
+  std::vector<pthread_t> workers;
   bool stopping = false;
 };
 
@@ -362,15 +382,33 @@ std::string formatDuration(uint32_t milliseconds) {
 
 std::string upgradeThumbnailUrl(const std::string& rawUrl, int targetSize) {
   if (rawUrl.empty() || targetSize < 300) return rawUrl;
+  if (rawUrl.rfind("/", 0) == 0 || rawUrl.rfind("sdmc:/", 0) == 0) return rawUrl;
   std::string url = rawUrl;
   if (url.find("googleusercontent.com") != std::string::npos ||
       url.find("ggpht.com") != std::string::npos) {
-    static const std::regex whRegex("=w\\d+-h\\d+");
-    url = std::regex_replace(url, whRegex, "=w" + std::to_string(targetSize) + "-h" + std::to_string(targetSize));
-    static const std::regex sRegex("=s\\d+");
-    url = std::regex_replace(url, sRegex, "=s" + std::to_string(targetSize));
+    const std::string targetWh = "=w" + std::to_string(targetSize) + "-h" + std::to_string(targetSize);
+    auto whPos = url.find("=w");
+    if (whPos != std::string::npos) {
+      size_t p = whPos + 2;
+      while (p < url.size() && std::isdigit(static_cast<unsigned char>(url[p]))) ++p;
+      if (p + 2 <= url.size() && url[p] == '-' && url[p + 1] == 'h') {
+        size_t q = p + 2;
+        while (q < url.size() && std::isdigit(static_cast<unsigned char>(url[q]))) ++q;
+        if (q > p + 2) {
+          url.replace(whPos, q - whPos, targetWh);
+        }
+      }
+    }
+    auto sPos = url.find("=s");
+    if (sPos != std::string::npos) {
+      size_t p = sPos + 2;
+      while (p < url.size() && std::isdigit(static_cast<unsigned char>(url[p]))) ++p;
+      if (p > sPos + 2) {
+        url.replace(sPos, p - sPos, "=s" + std::to_string(targetSize));
+      }
+    }
     if (url.find("=w") == std::string::npos && url.find("=s") == std::string::npos && url.find('?') == std::string::npos) {
-      url += "=w" + std::to_string(targetSize) + "-h" + std::to_string(targetSize) + "-l90-rj";
+      url += targetWh + "-l90-rj";
     }
   } else if (url.find("i.ytimg.com") != std::string::npos) {
     auto pos = url.find("/default.jpg");
@@ -405,19 +443,39 @@ void loadRemoteImage(brls::Image* image, const std::string& url,
     imageRequests[image] = resolvedUrl;
   }
   image->ptrLock();
-  imageWorkers()->submit([image, url = std::move(resolvedUrl)]() mutable {
+  imageWorkers()->submit([image, url = std::move(resolvedUrl), rawUrl = url]() mutable {
       std::string data;
+      const bool isLocalFile = (url.rfind("/", 0) == 0 || url.rfind("sdmc:/", 0) == 0);
       {
         std::lock_guard<std::mutex> lock(imageCacheMutex);
         const auto cached = imageCache.find(url);
         if (cached != imageCache.end()) data = cached->second;
-        if (data.empty()) {
+        if (data.empty() && !isLocalFile) {
           data = readPersistentImageLocked(url);
           if (!data.empty()) storeMemoryImageLocked(url, data);
         }
       }
       if (data.empty()) {
-        data = fetchRemoteImageData(url); if (!data.empty() && data.size() <= kMaxEncodedImageBytes && isSupportedImageData(data)) { std::lock_guard<std::mutex> lock(imageCacheMutex); storeMemoryImageLocked(url, data); writePersistentImageLocked(url, data); } else { data.clear(); }
+        data = fetchRemoteImageData(url);
+        if (!data.empty() && data.size() <= kMaxEncodedImageBytes && isSupportedImageData(data)) {
+          std::lock_guard<std::mutex> lock(imageCacheMutex);
+          storeMemoryImageLocked(url, data);
+          if (!isLocalFile) {
+            writePersistentImageLocked(url, data);
+          }
+        } else {
+          data.clear();
+        }
+      }
+      // Fallback offline: si la URL mejorada (ej. =w544-h544) falló sin internet, usar la versión base en caché
+      if (data.empty() && !isLocalFile && rawUrl != url) {
+        std::lock_guard<std::mutex> lock(imageCacheMutex);
+        const auto cached = imageCache.find(rawUrl);
+        if (cached != imageCache.end()) data = cached->second;
+        if (data.empty()) {
+          data = readPersistentImageLocked(rawUrl);
+          if (!data.empty()) storeMemoryImageLocked(rawUrl, data);
+        }
       }
       brls::sync([image, url, data = std::move(data)] {
         bool currentRequest = false;
@@ -427,7 +485,7 @@ void loadRemoteImage(brls::Image* image, const std::string& url,
           currentRequest = request != imageRequests.end() && request->second == url;
           if (currentRequest) imageRequests.erase(request);
         }
-        if (currentRequest && !data.empty()) {
+        if (currentRequest && !data.empty() && image->hasParent()) {
           int texture = brls::TextureCache::instance().getCache(url);
           if (texture == 0) {
             texture = nvgCreateImageMem(

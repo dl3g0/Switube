@@ -216,11 +216,15 @@ std::string DownloadManager::getDownloadedAudioPath(const std::string& videoId) 
 std::string DownloadManager::getDownloadedImagePath(const std::string& videoId) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   auto it = downloads_.find(videoId);
-  if (it != downloads_.end()) {
+  if (it != downloads_.end() && !it->second.imagePath.empty()) {
     if (fileExists(it->second.imagePath)) return it->second.imagePath;
     std::string sdmcPath = "sdmc:" + it->second.imagePath;
     if (fileExists(sdmcPath)) return sdmcPath;
   }
+  std::string defaultImg = downloadsDir_ + "/" + videoId + ".jpg";
+  if (fileExists(defaultImg)) return defaultImg;
+  std::string sdmcDefaultImg = "sdmc:" + defaultImg;
+  if (fileExists(sdmcDefaultImg)) return sdmcDefaultImg;
   return "";
 }
 
@@ -245,7 +249,8 @@ std::vector<YtTrack> DownloadManager::getDownloadedAsTracks() {
     t.artist = song.artist;
     t.album = song.album;
     t.durationMs = song.durationMs;
-    t.imageUrl = fileExists(song.imagePath) ? song.imagePath : song.imageUrl;
+    std::string localImg = getDownloadedImagePath(song.id);
+    t.imageUrl = !localImg.empty() ? localImg : song.imageUrl;
     list.push_back(t);
   }
   return list;

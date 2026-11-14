@@ -87,6 +87,7 @@ class LibraryTab : public brls::Box {
   brls::Label* titleLabel = nullptr;
   brls::Label* subtitleLabel = nullptr;
   brls::Box* content = nullptr;
+  std::vector<std::string> renderedFavoriteIds;
   size_t observerId = 0;
   size_t i18nObserverId = 0;
   size_t downloadObsId = 0;

@@ -172,6 +172,7 @@ void NXAudioSink::updateEqualizer() {
 }
 
 void NXAudioSink::submitCurrentBuffer() {
+  audioBuffers[currentBuffer].next = nullptr;
   audioBuffers[currentBuffer].data_size = currentFill;
   const Result appendResult =
       audoutAppendAudioOutBuffer(&audioBuffers[currentBuffer]);

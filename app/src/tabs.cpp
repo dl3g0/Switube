@@ -466,13 +466,26 @@ LibraryTab::LibraryTab() : alive(std::make_shared<std::atomic_bool>(true)) {
   auto token = alive;
   observerId = switube::YtEngine::getInstance().addObserver([this, token] {
     brls::sync([this, token] {
-      if (token->load()) refresh();
+      if (!token->load()) return;
+      auto favs = switube::YtEngine::getInstance().getFavorites();
+      if (favs.size() == renderedFavoriteIds.size()) {
+        bool same = true;
+        for (size_t i = 0; i < favs.size(); ++i) {
+          if (favs[i].id != renderedFavoriteIds[i]) {
+            same = false;
+            break;
+          }
+        }
+        if (same && !content->getChildren().empty()) return;
+      }
+      refresh();
     });
   });
 
   i18nObserverId = switube::I18n::getInstance().addObserver([this, token]() {
     brls::sync([this, token]() {
       if (token->load()) {
+        renderedFavoriteIds.clear();
         updateLabels();
         refresh();
       }
@@ -480,7 +493,10 @@ LibraryTab::LibraryTab() : alive(std::make_shared<std::atomic_bool>(true)) {
   });
 
   downloadObsId = switube::DownloadManager::getInstance().addObserver([this, token] {
-    if (token->load()) refresh();
+    if (token->load()) {
+      renderedFavoriteIds.clear();
+      refresh();
+    }
   });
 
   refresh();
@@ -522,6 +538,11 @@ void LibraryTab::refresh() {
 
   content->clearViews();
   auto favorites = switube::YtEngine::getInstance().getFavorites();
+  renderedFavoriteIds.clear();
+  renderedFavoriteIds.reserve(favorites.size());
+  for (const auto& f : favorites) {
+    renderedFavoriteIds.push_back(f.id);
+  }
 
   if (favorites.empty()) {
     auto* emptyNotice = swui::makeStatePanel(
@@ -1025,13 +1046,19 @@ void NowPlayingTab::draw(NVGcontext* vg, float x, float y, float width, float he
 
     std::string posStr = swui::formatDuration(now.positionMs);
     if (posStr.empty()) posStr = "0:00";
-    if (elapsedLabel) elapsedLabel->setText(posStr);
+    if (elapsedLabel && elapsedLabel->getFullText() != posStr) {
+      elapsedLabel->setText(posStr);
+    }
 
+    std::string remStr;
     if (now.durationMs > now.positionMs) {
       uint32_t remMs = now.durationMs - now.positionMs;
-      if (remainingLabel) remainingLabel->setText("-" + swui::formatDuration(remMs));
+      remStr = "-" + swui::formatDuration(remMs);
     } else {
-      if (remainingLabel) remainingLabel->setText(swui::formatDuration(now.durationMs));
+      remStr = swui::formatDuration(now.durationMs);
+    }
+    if (remainingLabel && remainingLabel->getFullText() != remStr) {
+      remainingLabel->setText(remStr);
     }
   }
 
