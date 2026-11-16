@@ -29,7 +29,11 @@ inline std::string upgradeThumbnailUrl(const std::string& rawUrl, int targetSize
 #include "i18n.hpp"
 
 #include <iostream>
+#include <fstream>
 #include <sstream>
+#include <ctime>
+#include <random>
+#include <sys/stat.h>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
@@ -173,13 +177,19 @@ void extractDurationFromRow(const json& row, YtTrack& track) {
 
 // Búsqueda recursiva del token de continuación
 std::string findContinuationToken(const json& j, int depth = 0) {
-  if (depth > 10) return "";
+  if (depth > 28) return "";
   if (j.is_object()) {
-    if (j.contains("nextContinuationData") && j["nextContinuationData"].contains("continuation")) {
+    if (j.contains("nextContinuationData") && j["nextContinuationData"].contains("continuation") &&
+        j["nextContinuationData"]["continuation"].is_string()) {
       return j["nextContinuationData"]["continuation"].get<std::string>();
     }
-    if (j.contains("continuationCommand") && j["continuationCommand"].contains("token")) {
+    if (j.contains("continuationCommand") && j["continuationCommand"].contains("token") &&
+        j["continuationCommand"]["token"].is_string()) {
       return j["continuationCommand"]["token"].get<std::string>();
+    }
+    if (j.contains("reloadContinuationData") && j["reloadContinuationData"].contains("continuation") &&
+        j["reloadContinuationData"]["continuation"].is_string()) {
+      return j["reloadContinuationData"]["continuation"].get<std::string>();
     }
     for (auto it = j.begin(); it != j.end(); ++it) {
       if (it.key() == "trackingParams") continue;
@@ -195,6 +205,177 @@ std::string findContinuationToken(const json& j, int depth = 0) {
   return "";
 }
 
+std::string extractTextNode(const json& node) {
+  if (!node.is_object()) return "";
+  if (node.contains("simpleText") && node["simpleText"].is_string()) {
+    return node["simpleText"].get<std::string>();
+  }
+  if (node.contains("runs") && node["runs"].is_array() && !node["runs"].empty()) {
+    std::string out;
+    for (const auto& r : node["runs"]) {
+      out += r.value("text", "");
+    }
+    return out;
+  }
+  return "";
+}
+
+bool parseTvTile(const json& tile, YtTrack& outTrack) {
+  if (!tile.is_object()) return false;
+
+  std::string vid;
+  std::string bid;
+  std::string ctype = tile.value("contentType", "");
+
+  if (tile.contains("onSelectCommand") && tile["onSelectCommand"].is_object()) {
+    const auto& osc = tile["onSelectCommand"];
+    if (osc.contains("watchEndpoint") && osc["watchEndpoint"].is_object()) {
+      vid = osc["watchEndpoint"].value("videoId", "");
+    }
+    if (osc.contains("browseEndpoint") && osc["browseEndpoint"].is_object()) {
+      bid = osc["browseEndpoint"].value("browseId", "");
+    }
+  }
+
+  std::string cid = tile.value("contentId", "");
+  if (vid.empty() && bid.empty() && !cid.empty()) {
+    if (ctype == "TILE_CONTENT_TYPE_PLAYLIST" || cid.rfind("PL", 0) == 0 || cid.rfind("OL", 0) == 0 || cid.rfind("VL", 0) == 0) {
+      bid = (cid.rfind("VL", 0) == 0) ? cid : ("VL" + cid);
+    } else if (cid.size() == 11) {
+      vid = cid;
+    }
+  }
+
+  if (!vid.empty() && vid.size() == 11) {
+    outTrack.id = vid;
+    outTrack.isPlaylist = false;
+    outTrack.isArtist = false;
+  } else if (!bid.empty()) {
+    // Ignorar botones de navegación interna de TV ("Ver todo", inicio de sesión, etc.)
+    if (bid.rfind("FE", 0) == 0 || bid == "VLSE") return false;
+    outTrack.id = bid;
+    if (bid.rfind("UC", 0) == 0 || ctype == "TILE_CONTENT_TYPE_CHANNEL") {
+      outTrack.isArtist = true;
+      outTrack.isPlaylist = false;
+    } else {
+      outTrack.isPlaylist = true;
+      outTrack.isArtist = false;
+    }
+  } else {
+    return false;
+  }
+
+  // 1. Metadata: title & artist/subtitle
+  if (tile.contains("metadata") && tile["metadata"].contains("tileMetadataRenderer")) {
+    const auto& meta = tile["metadata"]["tileMetadataRenderer"];
+    if (meta.contains("title")) {
+      outTrack.title = extractTextNode(meta["title"]);
+    }
+    if (meta.contains("lines") && meta["lines"].is_array() && !meta["lines"].empty()) {
+      for (const auto& lineObj : meta["lines"]) {
+        if (!lineObj.contains("lineRenderer")) continue;
+        const auto& lr = lineObj["lineRenderer"];
+        if (!lr.contains("items") || !lr["items"].is_array()) continue;
+        for (const auto& item : lr["items"]) {
+          if (!item.contains("lineItemRenderer")) continue;
+          const auto& lir = item["lineItemRenderer"];
+          if (lir.contains("text")) {
+            std::string txt = extractTextNode(lir["text"]);
+            if (!txt.empty() && txt != "•") {
+              outTrack.artist = txt;
+              break;
+            }
+          }
+        }
+        if (!outTrack.artist.empty()) break;
+      }
+    }
+  }
+
+  // Fallback a showMenuCommand (usado en listas y spotlights de TVHTML5)
+  if (tile.contains("onLongPressCommand") && tile["onLongPressCommand"].contains("showMenuCommand")) {
+    const auto& smc = tile["onLongPressCommand"]["showMenuCommand"];
+    if (outTrack.title.empty() && smc.contains("title")) {
+      outTrack.title = extractTextNode(smc["title"]);
+    }
+    if (outTrack.artist.empty() && smc.contains("subtitle")) {
+      std::string sub = extractTextNode(smc["subtitle"]);
+      auto bulletPos = sub.find(" • @");
+      if (bulletPos != std::string::npos) {
+        sub = sub.substr(0, bulletPos);
+      }
+      outTrack.artist = sub;
+    }
+  }
+
+  // Fallback a entityMetadataRenderer dentro de onFocusCommand
+  if (outTrack.title.empty() && tile.contains("onFocusCommand")) {
+    std::function<void(const json&)> findSpotlight = [&](const json& n) {
+      if (!outTrack.title.empty() || !n.is_object()) return;
+      if (n.contains("entityMetadataRenderer") && n["entityMetadataRenderer"].is_object()) {
+        const auto& emr = n["entityMetadataRenderer"];
+        if (emr.contains("title")) {
+          outTrack.title = extractTextNode(emr["title"]);
+        }
+        if (outTrack.artist.empty() && emr.contains("bylines") && emr["bylines"].is_array()) {
+          for (const auto& by : emr["bylines"]) {
+            if (!by.contains("lineRenderer") || !by["lineRenderer"].contains("items")) continue;
+            for (const auto& it : by["lineRenderer"]["items"]) {
+              if (it.contains("lineItemRenderer") && it["lineItemRenderer"].contains("text")) {
+                std::string txt = extractTextNode(it["lineItemRenderer"]["text"]);
+                if (!txt.empty() && txt != "•") {
+                  outTrack.artist = txt;
+                  break;
+                }
+              }
+            }
+            if (!outTrack.artist.empty()) break;
+          }
+        }
+        return;
+      }
+      for (auto it = n.begin(); it != n.end(); ++it) {
+        if (it.value().is_object()) findSpotlight(it.value());
+        else if (it.value().is_array()) {
+          for (const auto& el : it.value()) findSpotlight(el);
+        }
+      }
+    };
+    findSpotlight(tile["onFocusCommand"]);
+  }
+
+  // 2. Thumbnail y duración en tileHeaderRenderer
+  if (tile.contains("header") && tile["header"].contains("tileHeaderRenderer")) {
+    const auto& thr = tile["header"]["tileHeaderRenderer"];
+    if (thr.contains("thumbnail") && thr["thumbnail"].contains("thumbnails") &&
+        thr["thumbnail"]["thumbnails"].is_array() && !thr["thumbnail"]["thumbnails"].empty()) {
+      outTrack.imageUrl = thr["thumbnail"]["thumbnails"].back().value("url", "");
+    }
+    if (thr.contains("thumbnailOverlays") && thr["thumbnailOverlays"].is_array()) {
+      for (const auto& ov : thr["thumbnailOverlays"]) {
+        if (ov.contains("thumbnailOverlayTimeStatusRenderer")) {
+          const auto& tots = ov["thumbnailOverlayTimeStatusRenderer"];
+          if (tots.contains("text")) {
+            std::string durStr = extractTextNode(tots["text"]);
+            uint32_t ms = parseDurationToMs(durStr);
+            if (ms > 0) {
+              outTrack.durationStr = durStr;
+              outTrack.durationMs = ms;
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (outTrack.artist.empty()) {
+    outTrack.artist = "YouTube Music";
+  }
+
+  return !outTrack.title.empty();
+}
+
 } // namespace
 
 YtMusicClient::YtMusicClient() {}
@@ -203,11 +384,84 @@ YtMusicClient::~YtMusicClient() {}
 
 bool YtMusicClient::init() {
   curl_global_init(CURL_GLOBAL_ALL);
+  loadAuthConfig();
   return true;
 }
 
 void YtMusicClient::setAuthCookies(const std::string& cookies) {
+  std::lock_guard<std::recursive_mutex> lock(clientMutex_);
   authCookies_ = cookies;
+}
+
+bool YtMusicClient::isSignedIn() const {
+  std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+  return account_.signedIn && (!account_.accessToken.empty() || !account_.refreshToken.empty());
+}
+
+YtAccountInfo YtMusicClient::getAccountInfo() const {
+  std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+  return account_;
+}
+
+void YtMusicClient::loadAuthConfig() {
+  const char* paths[] = {
+      "/config/Switube/auth.json",
+      "sdmc:/config/Switube/auth.json"
+  };
+  for (const char* path : paths) {
+    std::ifstream f(path);
+    if (!f.is_open()) continue;
+    try {
+      json j;
+      f >> j;
+      std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+      account_.accessToken = j.value("access_token", "");
+      account_.refreshToken = j.value("refresh_token", "");
+      account_.expiresAtEpoch = j.value("expires_at", static_cast<int64_t>(0));
+      account_.name = j.value("name", "");
+      account_.handle = j.value("handle", "");
+      account_.photoUrl = j.value("photo_url", "");
+      account_.signedIn = !account_.refreshToken.empty() || !account_.accessToken.empty();
+      if (account_.signedIn) {
+        nxlog::pushf("YtMusicClient: loaded linked YouTube account '%s' (%s)",
+                     account_.name.c_str(), account_.handle.c_str());
+      }
+      return;
+    } catch (...) {}
+  }
+}
+
+void YtMusicClient::saveAuthConfig() {
+  mkdir("/config", 0755);
+  mkdir("/config/Switube", 0755);
+  YtAccountInfo info;
+  {
+    std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+    info = account_;
+  }
+  json j = {
+      {"access_token", info.accessToken},
+      {"refresh_token", info.refreshToken},
+      {"expires_at", info.expiresAtEpoch},
+      {"name", info.name},
+      {"handle", info.handle},
+      {"photo_url", info.photoUrl}
+  };
+  std::ofstream f("/config/Switube/auth.json", std::ios::trunc);
+  if (f.is_open()) {
+    f << j.dump(2);
+  }
+}
+
+void YtMusicClient::logout() {
+  {
+    std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+    account_ = YtAccountInfo{};
+    authCookies_.clear();
+  }
+  std::remove("/config/Switube/auth.json");
+  std::remove("sdmc:/config/Switube/auth.json");
+  nxlog::push("YtMusicClient: signed out and cleared auth.json");
 }
 
 void YtMusicClient::ensureVisitorData() {
@@ -271,28 +525,64 @@ std::string YtMusicClient::postInnerTube(const std::string& endpoint,
     return "";
   }
 
+  const bool isTvClient = (jsonBody.find("\"TVHTML5\"") != std::string::npos);
+  const std::string effectiveHost = isTvClient ? "https://www.youtube.com" : baseHost;
   std::string responseStr;
-  std::string url = (endpoint.rfind("http", 0) == 0) ? endpoint : (baseHost + "/youtubei/v1/" + endpoint);
+  std::string url = (endpoint.rfind("http", 0) == 0) ? endpoint : (effectiveHost + "/youtubei/v1/" + endpoint);
   char errorBuffer[CURL_ERROR_SIZE] = {0};
 
   struct curl_slist* headers = nullptr;
   headers = curl_slist_append(headers, "Content-Type: application/json");
 
   std::string ua = userAgentOverride.empty()
-      ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+      ? (isTvClient
+             ? "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
+             : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
       : userAgentOverride;
   std::string uaHdr = "User-Agent: " + ua;
   headers = curl_slist_append(headers, uaHdr.c_str());
 
-  if (sendOrigin) {
+  if (isTvClient) {
+    headers = curl_slist_append(headers, "Origin: https://www.youtube.com");
+    headers = curl_slist_append(headers, "Referer: https://www.youtube.com/tv");
+
+    bool needsRefresh = false;
+    std::string bearerToken;
+    {
+      std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+      if (account_.signedIn && !account_.refreshToken.empty()) {
+        int64_t nowEpoch = static_cast<int64_t>(std::time(nullptr));
+        if (account_.accessToken.empty() || nowEpoch >= account_.expiresAtEpoch - 120) {
+          needsRefresh = true;
+        } else {
+          bearerToken = account_.accessToken;
+        }
+      }
+    }
+    if (needsRefresh) {
+      if (refreshAccessToken()) {
+        std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+        bearerToken = account_.accessToken;
+      }
+    }
+    if (!bearerToken.empty()) {
+      std::string authHdr = "Authorization: Bearer " + bearerToken;
+      headers = curl_slist_append(headers, authHdr.c_str());
+    }
+  } else if (sendOrigin) {
     std::string originHdr = "Origin: " + baseHost;
     std::string refererHdr = "Referer: " + baseHost + "/";
     headers = curl_slist_append(headers, originHdr.c_str());
     headers = curl_slist_append(headers, refererHdr.c_str());
   }
 
-  if (!authCookies_.empty()) {
-    std::string cookieHdr = "Cookie: " + authCookies_;
+  std::string cookiesCopy;
+  {
+    std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+    cookiesCopy = authCookies_;
+  }
+  if (!cookiesCopy.empty() && !isTvClient) {
+    std::string cookieHdr = "Cookie: " + cookiesCopy;
     headers = curl_slist_append(headers, cookieHdr.c_str());
   }
 
@@ -350,7 +640,6 @@ std::string YtMusicClient::postInnerTube(const std::string& endpoint,
 }
 
 bool YtMusicClient::resolveAudioStream(const std::string& videoId, AudioStreamUrl& outStream) {
-  std::lock_guard<std::mutex> lock(clientMutex_);
   if (videoId.empty() || videoId.size() != 11) {
     nxlog::pushf("resolveAudioStream rejected: '%s' is not an 11-char videoId", videoId.c_str());
     return false;
@@ -527,155 +816,249 @@ bool YtMusicClient::resolveAudioStream(const std::string& videoId, AudioStreamUr
   return attemptResolve();
 }
 
-bool YtMusicClient::getPlaylistTracks(const std::string& browseId, std::vector<YtTrack>& outTracks) {
-  nxlog::pushf("getPlaylistTracks: fetching tracks for browseId '%s'...", browseId.c_str());
-  json clientObj = {
-      {"clientName", "WEB_REMIX"},
-      {"clientVersion", "1.20240101.01.00"},
-      {"hl", I18n::getInstance().getHl()},
-      {"gl", I18n::getInstance().getGl()}
-  };
-  if (!visitorData_.empty()) {
-    clientObj["visitorData"] = visitorData_;
-  }
-  json payload = {
-      {"context", {{"client", clientObj}}},
-      {"browseId", browseId}
-  };
+bool YtMusicClient::getPlaylistTracks(const std::string& browseId,
+                                      std::vector<YtTrack>& outTracks,
+                                      std::string& outContinuationToken,
+                                      const std::string& continuationToken) {
+  outContinuationToken.clear();
+  nxlog::pushf("getPlaylistTracks: fetching tracks for browseId '%s' (cont: %s)...",
+               browseId.c_str(), continuationToken.empty() ? "NONE" : "YES");
 
-  std::string resp = postInnerTube("browse", payload.dump());
-  if (resp.empty()) return false;
+  const bool isPersonalList = (browseId == "VLLM" || browseId == "FEmusic_liked_videos" || browseId == "LL");
+  const bool isTvCont = (continuationToken.rfind("TV:", 0) == 0);
+  const bool isWrCont = (continuationToken.rfind("WR:", 0) == 0);
 
-  try {
-    auto j = json::parse(resp);
-
-    // Extraer metadatos de cabecera del álbum / single / playlist (artista, título y portada por defecto)
-    std::string defaultAlbum;
-    std::string defaultArtist;
-    std::string defaultThumb;
-
-    std::function<void(const json&)> findHeaderMeta = [&](const json& node) {
-      if (!node.is_object() && !node.is_array()) return;
-      if (node.is_object()) {
-        const json* hdr = nullptr;
-        if (node.contains("musicResponsiveHeaderRenderer")) {
-          hdr = &node["musicResponsiveHeaderRenderer"];
-        } else if (node.contains("musicDetailHeaderRenderer")) {
-          hdr = &node["musicDetailHeaderRenderer"];
-        }
-        if (hdr && hdr->is_object()) {
-          if (defaultAlbum.empty() && hdr->contains("title") && (*hdr)["title"].contains("runs") &&
-              (*hdr)["title"]["runs"].is_array() && !(*hdr)["title"]["runs"].empty()) {
-            defaultAlbum = (*hdr)["title"]["runs"][0].value("text", "");
-          }
-          if (defaultArtist.empty() && hdr->contains("straplineTextOne") &&
-              (*hdr)["straplineTextOne"].contains("runs") &&
-              (*hdr)["straplineTextOne"]["runs"].is_array() &&
-              !(*hdr)["straplineTextOne"]["runs"].empty()) {
-            defaultArtist = (*hdr)["straplineTextOne"]["runs"][0].value("text", "");
-          }
-          if (defaultArtist.empty() && hdr->contains("subtitle") &&
-              (*hdr)["subtitle"].contains("runs") &&
-              (*hdr)["subtitle"]["runs"].is_array()) {
-            const auto& sruns = (*hdr)["subtitle"]["runs"];
-            if (sruns.size() >= 3) {
-              defaultArtist = sruns[2].value("text", "");
-            } else if (!sruns.empty()) {
-              defaultArtist = sruns[0].value("text", "");
-            }
-          }
-          if (defaultThumb.empty() && hdr->contains("thumbnail") &&
-              (*hdr)["thumbnail"].contains("musicThumbnailRenderer")) {
-            const auto& mtr = (*hdr)["thumbnail"]["musicThumbnailRenderer"];
-            if (mtr.contains("thumbnail") && mtr["thumbnail"].contains("thumbnails") &&
-                mtr["thumbnail"]["thumbnails"].is_array() && !mtr["thumbnail"]["thumbnails"].empty()) {
-              defaultThumb = mtr["thumbnail"]["thumbnails"].back().value("url", "");
-            }
-          }
-        }
-        for (auto it = node.begin(); it != node.end(); ++it) {
-          if (it.key() == "trackingParams") continue;
-          findHeaderMeta(it.value());
-        }
-      } else if (node.is_array()) {
-        for (const auto& item : node) {
-          findHeaderMeta(item);
-        }
-      }
+  if (!isPersonalList && !isTvCont) {
+    json clientObj = {
+        {"clientName", "WEB_REMIX"},
+        {"clientVersion", "1.20240101.01.00"},
+        {"hl", I18n::getInstance().getHl()},
+        {"gl", I18n::getInstance().getGl()}
     };
-    findHeaderMeta(j);
+    if (!visitorData_.empty()) {
+      clientObj["visitorData"] = visitorData_;
+    }
 
-    std::function<void(const json&)> findTrackRows = [&](const json& node) {
-      if (node.is_object()) {
-        if (node.contains("musicResponsiveListItemRenderer")) {
-          const auto& row = node["musicResponsiveListItemRenderer"];
-          std::string vid = findVideoId(row);
-          if (!vid.empty() && vid.size() == 11) {
-            YtTrack t;
-            t.id = vid;
-            t.isPlaylist = false;
-            t.isArtist = false;
-            if (row.contains("flexColumns") && row["flexColumns"].is_array() && !row["flexColumns"].empty()) {
-              const auto& col0 = row["flexColumns"][0];
-              if (col0.contains("musicResponsiveListItemFlexColumnRenderer")) {
-                const auto& flex0 = col0["musicResponsiveListItemFlexColumnRenderer"];
-                if (flex0.contains("text") && flex0["text"].contains("runs") &&
-                    flex0["text"]["runs"].is_array() && !flex0["text"]["runs"].empty()) {
-                  t.title = flex0["text"]["runs"][0].value("text", "Unknown");
+    std::string endpoint = "browse";
+    std::string rawWrTok;
+    json payload = {{"context", {{"client", clientObj}}}};
+    if (isWrCont) {
+      rawWrTok = continuationToken.substr(3);
+      endpoint = "browse?ctoken=" + rawWrTok + "&continuation=" + rawWrTok + "&type=next";
+      payload["continuation"] = rawWrTok;
+    } else if (!continuationToken.empty()) {
+      rawWrTok = continuationToken;
+      endpoint = "browse?ctoken=" + rawWrTok + "&continuation=" + rawWrTok + "&type=next";
+      payload["continuation"] = rawWrTok;
+    } else {
+      payload["browseId"] = browseId;
+    }
+
+    std::string resp = postInnerTube(endpoint, payload.dump());
+    if (!resp.empty()) {
+      try {
+        auto j = json::parse(resp);
+
+        std::string nextTok = findContinuationToken(j);
+        if (!nextTok.empty() && nextTok != rawWrTok) {
+          outContinuationToken = "WR:" + nextTok;
+        }
+
+        // Extraer metadatos de cabecera del álbum / single / playlist (artista, título y portada por defecto)
+        std::string defaultAlbum;
+        std::string defaultArtist;
+        std::string defaultThumb;
+
+        std::function<void(const json&)> findHeaderMeta = [&](const json& node) {
+          if (!node.is_object() && !node.is_array()) return;
+          if (node.is_object()) {
+            const json* hdr = nullptr;
+            if (node.contains("musicResponsiveHeaderRenderer")) {
+              hdr = &node["musicResponsiveHeaderRenderer"];
+            } else if (node.contains("musicDetailHeaderRenderer")) {
+              hdr = &node["musicDetailHeaderRenderer"];
+            }
+            if (hdr && hdr->is_object()) {
+              if (defaultAlbum.empty() && hdr->contains("title") && (*hdr)["title"].contains("runs") &&
+                  (*hdr)["title"]["runs"].is_array() && !(*hdr)["title"]["runs"].empty()) {
+                defaultAlbum = (*hdr)["title"]["runs"][0].value("text", "");
+              }
+              if (defaultArtist.empty() && hdr->contains("straplineTextOne") &&
+                  (*hdr)["straplineTextOne"].contains("runs") &&
+                  (*hdr)["straplineTextOne"]["runs"].is_array() &&
+                  !(*hdr)["straplineTextOne"]["runs"].empty()) {
+                defaultArtist = (*hdr)["straplineTextOne"]["runs"][0].value("text", "");
+              }
+              if (defaultArtist.empty() && hdr->contains("subtitle") &&
+                  (*hdr)["subtitle"].contains("runs") &&
+                  (*hdr)["subtitle"]["runs"].is_array()) {
+                const auto& sruns = (*hdr)["subtitle"]["runs"];
+                if (sruns.size() >= 3) {
+                  defaultArtist = sruns[2].value("text", "");
+                } else if (!sruns.empty()) {
+                  defaultArtist = sruns[0].value("text", "");
                 }
               }
-              if (row["flexColumns"].size() > 1) {
-                const auto& col1 = row["flexColumns"][1];
-                if (col1.contains("musicResponsiveListItemFlexColumnRenderer")) {
-                  const auto& flex1 = col1["musicResponsiveListItemFlexColumnRenderer"];
-                  if (flex1.contains("text") && flex1["text"].contains("runs") &&
-                      flex1["text"]["runs"].is_array() && !flex1["text"]["runs"].empty()) {
-                    const auto& runs = flex1["text"]["runs"];
-                    t.artist = runs[0].value("text", "");
-                    if (runs.size() >= 3) t.album = runs[2].value("text", "");
+              if (defaultThumb.empty() && hdr->contains("thumbnail") &&
+                  (*hdr)["thumbnail"].contains("musicThumbnailRenderer")) {
+                const auto& mtr = (*hdr)["thumbnail"]["musicThumbnailRenderer"];
+                if (mtr.contains("thumbnail") && mtr["thumbnail"].contains("thumbnails") &&
+                    mtr["thumbnail"]["thumbnails"].is_array() && !mtr["thumbnail"]["thumbnails"].empty()) {
+                  defaultThumb = mtr["thumbnail"]["thumbnails"].back().value("url", "");
+                }
+              }
+            }
+            for (auto it = node.begin(); it != node.end(); ++it) {
+              if (it.key() == "trackingParams") continue;
+              findHeaderMeta(it.value());
+            }
+          } else if (node.is_array()) {
+            for (const auto& item : node) {
+              findHeaderMeta(item);
+            }
+          }
+        };
+        findHeaderMeta(j);
+
+        std::function<void(const json&)> findTrackRows = [&](const json& node) {
+          if (node.is_object()) {
+            if (node.contains("musicResponsiveListItemRenderer")) {
+              const auto& row = node["musicResponsiveListItemRenderer"];
+              std::string vid = findVideoId(row);
+              if (!vid.empty() && vid.size() == 11) {
+                YtTrack t;
+                t.id = vid;
+                t.isPlaylist = false;
+                t.isArtist = false;
+                if (row.contains("flexColumns") && row["flexColumns"].is_array() && !row["flexColumns"].empty()) {
+                  const auto& col0 = row["flexColumns"][0];
+                  if (col0.contains("musicResponsiveListItemFlexColumnRenderer")) {
+                    const auto& flex0 = col0["musicResponsiveListItemFlexColumnRenderer"];
+                    if (flex0.contains("text") && flex0["text"].contains("runs") &&
+                        flex0["text"]["runs"].is_array() && !flex0["text"]["runs"].empty()) {
+                      t.title = flex0["text"]["runs"][0].value("text", "Unknown");
+                    }
+                  }
+                  if (row["flexColumns"].size() > 1) {
+                    const auto& col1 = row["flexColumns"][1];
+                    if (col1.contains("musicResponsiveListItemFlexColumnRenderer")) {
+                      const auto& flex1 = col1["musicResponsiveListItemFlexColumnRenderer"];
+                      if (flex1.contains("text") && flex1["text"].contains("runs") &&
+                          flex1["text"]["runs"].is_array() && !flex1["text"]["runs"].empty()) {
+                        const auto& runs = flex1["text"]["runs"];
+                        t.artist = runs[0].value("text", "");
+                        if (runs.size() >= 3) t.album = runs[2].value("text", "");
+                      }
+                    }
                   }
                 }
+                if (t.artist.empty()) t.artist = defaultArtist.empty() ? "Unknown Artist" : defaultArtist;
+                if (t.album.empty() && !defaultAlbum.empty()) t.album = defaultAlbum;
+
+                if (row.contains("thumbnail") && row["thumbnail"].contains("musicThumbnailRenderer")) {
+                  const auto& mtr = row["thumbnail"]["musicThumbnailRenderer"];
+                  if (mtr.contains("thumbnail") && mtr["thumbnail"].contains("thumbnails") &&
+                      mtr["thumbnail"]["thumbnails"].is_array() && !mtr["thumbnail"]["thumbnails"].empty()) {
+                    t.imageUrl = mtr["thumbnail"]["thumbnails"].back().value("url", "");
+                  }
+                }
+                if (t.imageUrl.empty() && !defaultThumb.empty()) {
+                  t.imageUrl = defaultThumb;
+                }
+
+                // Extraer duración precisa
+                extractDurationFromRow(row, t);
+
+                outTracks.push_back(t);
+              }
+            } else {
+              for (auto it = node.begin(); it != node.end(); ++it) {
+                if (it.key() == "trackingParams") continue;
+                findTrackRows(it.value());
               }
             }
-            if (t.artist.empty()) t.artist = defaultArtist.empty() ? "Unknown Artist" : defaultArtist;
-            if (t.album.empty() && !defaultAlbum.empty()) t.album = defaultAlbum;
-
-            if (row.contains("thumbnail") && row["thumbnail"].contains("musicThumbnailRenderer")) {
-              const auto& mtr = row["thumbnail"]["musicThumbnailRenderer"];
-              if (mtr.contains("thumbnail") && mtr["thumbnail"].contains("thumbnails") &&
-                  mtr["thumbnail"]["thumbnails"].is_array() && !mtr["thumbnail"]["thumbnails"].empty()) {
-                t.imageUrl = mtr["thumbnail"]["thumbnails"].back().value("url", "");
-              }
+          } else if (node.is_array()) {
+            for (const auto& item : node) {
+              findTrackRows(item);
             }
-            if (t.imageUrl.empty() && !defaultThumb.empty()) {
-              t.imageUrl = defaultThumb;
-            }
-
-            // Extraer duración precisa
-            extractDurationFromRow(row, t);
-
-            outTracks.push_back(t);
           }
-        } else {
-          for (auto it = node.begin(); it != node.end(); ++it) {
-            if (it.key() == "trackingParams") continue;
-            findTrackRows(it.value());
-          }
-        }
-      } else if (node.is_array()) {
-        for (const auto& item : node) {
-          findTrackRows(item);
-        }
+        };
+
+        findTrackRows(j);
+      } catch (const std::exception& e) {
+        nxlog::pushf("getPlaylistTracks WEB_REMIX error: %s", e.what());
       }
+    }
+  }
+
+  // Fallback o resolución autenticada mediante TVHTML5 (para listas personales, VLLM, etc.)
+  if (outTracks.empty()) {
+    outContinuationToken.clear();
+    std::string tvBrowseId = (browseId == "FEmusic_liked_videos") ? "VLLM" : browseId;
+    if (tvBrowseId.rfind("PL", 0) == 0 || tvBrowseId.rfind("OL", 0) == 0 || tvBrowseId == "LL") {
+      tvBrowseId = "VL" + tvBrowseId;
+    }
+
+    json tvPayload = {
+        {"context", {
+            {"client", {
+                {"clientName", "TVHTML5"},
+                {"clientVersion", "7.20250101.00.00"},
+                {"hl", I18n::getInstance().getHl()},
+                {"gl", I18n::getInstance().getGl()}
+            }}
+        }}
     };
 
-    findTrackRows(j);
-    nxlog::pushf("getPlaylistTracks: extracted %zu tracks from '%s'", outTracks.size(), browseId.c_str());
-    return !outTracks.empty();
-  } catch (const std::exception& e) {
-    nxlog::pushf("getPlaylistTracks error: %s", e.what());
-    return false;
+    std::string rawTvTok;
+    if (isTvCont) {
+      rawTvTok = continuationToken.substr(3);
+      tvPayload["continuation"] = rawTvTok;
+    } else if (!continuationToken.empty() && !isWrCont) {
+      rawTvTok = continuationToken;
+      tvPayload["continuation"] = rawTvTok;
+    } else {
+      tvPayload["browseId"] = tvBrowseId;
+    }
+
+    std::string tvResp = postInnerTube("browse", tvPayload.dump());
+    if (!tvResp.empty()) {
+      try {
+        auto tj = json::parse(tvResp);
+        std::string nextTok = findContinuationToken(tj);
+        if (!nextTok.empty() && nextTok != rawTvTok) {
+          outContinuationToken = "TV:" + nextTok;
+        }
+
+        std::function<void(const json&)> findTvTiles = [&](const json& node) {
+          if (node.is_object()) {
+            if (node.contains("tileRenderer")) {
+              YtTrack t;
+              if (parseTvTile(node["tileRenderer"], t) && !t.isPlaylist && !t.isArtist && t.id.size() == 11) {
+                outTracks.push_back(t);
+              }
+              return;
+            }
+            for (auto it = node.begin(); it != node.end(); ++it) {
+              if (it.key() == "trackingParams") continue;
+              findTvTiles(it.value());
+            }
+          } else if (node.is_array()) {
+            for (const auto& elem : node) {
+              findTvTiles(elem);
+            }
+          }
+        };
+        findTvTiles(tj);
+      } catch (const std::exception& e) {
+        nxlog::pushf("getPlaylistTracks TVHTML5 error: %s", e.what());
+      }
+    }
   }
+
+  nxlog::pushf("getPlaylistTracks: extracted %zu tracks from '%s' (hasMore: %s)",
+               outTracks.size(), browseId.c_str(), outContinuationToken.empty() ? "NO" : "YES");
+  return !outTracks.empty();
 }
 
 bool YtMusicClient::getArtistPage(const std::string& artistBrowseId, YtArtistPage& outPage) {
@@ -932,6 +1315,10 @@ bool YtMusicClient::searchTracks(const std::string& query,
                                  size_t limit) {
   outContinuationToken.clear();
 
+  if (continuationToken == "ALL_FALLBACK_SONGS") {
+    return searchTracks(query, YtSearchFilter::Songs, outTracks, outContinuationToken, "", limit);
+  }
+
   std::string endpoint = "search";
   json payload = {
       {"context", {
@@ -1153,6 +1540,10 @@ bool YtMusicClient::searchTracks(const std::string& query,
     };
 
     findSearchTracks(j);
+    if (outContinuationToken.empty() && continuationToken.empty() &&
+        filter == YtSearchFilter::All && !outTracks.empty()) {
+      outContinuationToken = "ALL_FALLBACK_SONGS";
+    }
     nxlog::pushf("searchTracks: parsed %zu tracks (hasMore: %s)",
                  outTracks.size(), outContinuationToken.empty() ? "NO" : "YES");
     return !outTracks.empty();
@@ -1162,7 +1553,10 @@ bool YtMusicClient::searchTracks(const std::string& query,
   }
 }
 
-bool YtMusicClient::getHomeFeed(std::vector<YtShelf>& outShelves) {
+bool YtMusicClient::getHomeFeed(std::vector<YtShelf>& outShelves,
+                                std::string& outContinuationToken,
+                                const std::string& continuationToken) {
+  outContinuationToken.clear();
   auto parseCarouselSections = [this, &outShelves](const json& sections) {
     if (!sections.is_array()) return;
     for (const auto& sec : sections) {
@@ -1337,45 +1731,44 @@ bool YtMusicClient::getHomeFeed(std::vector<YtShelf>& outShelves) {
     }
   };
 
-  auto fetchBrowseWithContinuations = [this, &parseCarouselSections](const std::string& browseId, int maxContinuations) {
-    json clientObj = {
-        {"clientName", "WEB_REMIX"},
-        {"clientVersion", "1.20240101.01.00"},
-        {"hl", I18n::getInstance().getHl()},
-        {"gl", I18n::getInstance().getGl()}
-    };
-    if (!visitorData_.empty()) {
-      clientObj["visitorData"] = visitorData_;
-    }
-    json payload = {
-        {"context", {{"client", clientObj}}},
-        {"browseId", browseId}
-    };
+  auto fetchBrowseWithContinuations = [this, &parseCarouselSections, &outContinuationToken](
+                                          const std::string& browseId,
+                                          int maxContinuations,
+                                          const std::string& startContToken = "") {
+    std::string ctok = startContToken;
+    if (ctok.empty()) {
+      json clientObj = {
+          {"clientName", "WEB_REMIX"},
+          {"clientVersion", "1.20240101.01.00"},
+          {"hl", I18n::getInstance().getHl()},
+          {"gl", I18n::getInstance().getGl()}
+      };
+      if (!visitorData_.empty()) {
+        clientObj["visitorData"] = visitorData_;
+      }
+      json payload = {
+          {"context", {{"client", clientObj}}},
+          {"browseId", browseId}
+      };
 
-    std::string resp = postInnerTube("browse", payload.dump());
-    if (resp.empty()) return;
+      std::string resp = postInnerTube("browse", payload.dump());
+      if (resp.empty()) return;
 
-    std::string ctok;
-    try {
-      auto j = json::parse(resp);
-      if (j.contains("contents")) {
-        auto singleCol = j["contents"].value("singleColumnBrowseResultsRenderer", json::object());
-        if (singleCol.contains("tabs") && !singleCol["tabs"].empty()) {
-          auto tab = singleCol["tabs"][0].value("tabRenderer", json::object());
-          auto contentObj = tab.value("content", json::object());
-          auto sectionList = contentObj.value("sectionListRenderer", json::object());
-          parseCarouselSections(sectionList.value("contents", json::array()));
-          if (sectionList.contains("continuations") && sectionList["continuations"].is_array() &&
-              !sectionList["continuations"].empty()) {
-            const auto& c0 = sectionList["continuations"][0];
-            if (c0.contains("nextContinuationData")) {
-              ctok = c0["nextContinuationData"].value("continuation", "");
-            }
+      try {
+        auto j = json::parse(resp);
+        if (j.contains("contents")) {
+          auto singleCol = j["contents"].value("singleColumnBrowseResultsRenderer", json::object());
+          if (singleCol.contains("tabs") && !singleCol["tabs"].empty()) {
+            auto tab = singleCol["tabs"][0].value("tabRenderer", json::object());
+            auto contentObj = tab.value("content", json::object());
+            auto sectionList = contentObj.value("sectionListRenderer", json::object());
+            parseCarouselSections(sectionList.value("contents", json::array()));
+            ctok = findContinuationToken(sectionList);
           }
         }
+      } catch (const std::exception& e) {
+        nxlog::pushf("getHomeFeed parse error (%s): %s", browseId.c_str(), e.what());
       }
-    } catch (const std::exception& e) {
-      nxlog::pushf("getHomeFeed parse error (%s): %s", browseId.c_str(), e.what());
     }
 
     // Seguir páginas de continuación de FEmusic_home (como hace BitChord)
@@ -1394,6 +1787,7 @@ bool YtMusicClient::getHomeFeed(std::vector<YtShelf>& outShelves) {
           {"continuation", ctok}
       };
       std::string endpoint = "browse?ctoken=" + ctok + "&continuation=" + ctok + "&type=next";
+      std::string prevTok = ctok;
       ctok.clear();
 
       std::string contResp = postInnerTube(endpoint, contPayload.dump());
@@ -1407,12 +1801,9 @@ bool YtMusicClient::getHomeFeed(std::vector<YtShelf>& outShelves) {
           if (slc.contains("contents")) {
             parseCarouselSections(slc["contents"]);
           }
-          if (slc.contains("continuations") && slc["continuations"].is_array() &&
-              !slc["continuations"].empty()) {
-            const auto& c0 = slc["continuations"][0];
-            if (c0.contains("nextContinuationData")) {
-              ctok = c0["nextContinuationData"].value("continuation", "");
-            }
+          std::string nextTok = findContinuationToken(slc);
+          if (!nextTok.empty() && nextTok != prevTok) {
+            ctok = nextTok;
           }
         }
       } catch (const std::exception& e) {
@@ -1420,7 +1811,90 @@ bool YtMusicClient::getHomeFeed(std::vector<YtShelf>& outShelves) {
         break;
       }
     }
+    if (!ctok.empty() && browseId == "FEmusic_home") {
+      outContinuationToken = ctok;
+    }
   };
+
+  if (!continuationToken.empty()) {
+    fetchBrowseWithContinuations("FEmusic_home", 2, continuationToken);
+    nxlog::pushf("getHomeFeed continuation completed: %zu shelves (hasMore: %s)",
+                 outShelves.size(), outContinuationToken.empty() ? "NO" : "YES");
+    return !outShelves.empty();
+  }
+
+  // 0. Si el usuario vinculó su cuenta (TVHTML5), traer primero sus carruseles musicales personalizados
+  if (isSignedIn()) {
+    json tvPayload = {
+        {"context", {
+            {"client", {
+                {"clientName", "TVHTML5"},
+                {"clientVersion", "7.20250101.00.00"},
+                {"hl", I18n::getInstance().getHl()},
+                {"gl", I18n::getInstance().getGl()}
+            }}
+        }},
+        {"browseId", "FEtopics_music"}
+    };
+    std::string tvResp = postInnerTube("browse", tvPayload.dump());
+    if (!tvResp.empty()) {
+      try {
+        auto tj = json::parse(tvResp);
+        std::function<void(const json&)> findTvShelves = [&](const json& node) {
+          if (node.is_object()) {
+            if (node.contains("shelfRenderer") && node["shelfRenderer"].is_object()) {
+              const auto& sr = node["shelfRenderer"];
+              YtShelf shelf;
+              if (sr.contains("title")) {
+                shelf.title = extractTextNode(sr["title"]);
+              }
+              if (shelf.title.empty() && sr.contains("headerRenderer") &&
+                  sr["headerRenderer"].contains("shelfHeaderRenderer")) {
+                const auto& shr = sr["headerRenderer"]["shelfHeaderRenderer"];
+                if (shr.contains("title")) {
+                  shelf.title = extractTextNode(shr["title"]);
+                } else if (shr.contains("avatarLockup") &&
+                           shr["avatarLockup"].contains("avatarLockupRenderer") &&
+                           shr["avatarLockup"]["avatarLockupRenderer"].contains("title")) {
+                  shelf.title = extractTextNode(shr["avatarLockup"]["avatarLockupRenderer"]["title"]);
+                }
+              }
+
+              if (!shelf.title.empty() && sr.contains("content") &&
+                  sr["content"].contains("horizontalListRenderer") &&
+                  sr["content"]["horizontalListRenderer"].contains("items")) {
+                const auto& items = sr["content"]["horizontalListRenderer"]["items"];
+                if (items.is_array()) {
+                  for (const auto& item : items) {
+                    if (!item.contains("tileRenderer")) continue;
+                    YtTrack trk;
+                    if (parseTvTile(item["tileRenderer"], trk)) {
+                      shelf.tracks.push_back(trk);
+                    }
+                  }
+                }
+              }
+              if (!shelf.title.empty() && !shelf.tracks.empty()) {
+                outShelves.push_back(shelf);
+              }
+              return;
+            }
+            for (auto it = node.begin(); it != node.end(); ++it) {
+              if (it.key() == "trackingParams") continue;
+              findTvShelves(it.value());
+            }
+          } else if (node.is_array()) {
+            for (const auto& el : node) {
+              findTvShelves(el);
+            }
+          }
+        };
+        findTvShelves(tj);
+      } catch (const std::exception& e) {
+        nxlog::pushf("getHomeFeed TVHTML5 parse error: %s", e.what());
+      }
+    }
+  }
 
   // 1. Carruseles principales de Inicio + sus páginas de continuación (Selección rápida, Nuevos lanzamientos, etc.)
   fetchBrowseWithContinuations("FEmusic_home", 3);
@@ -1443,6 +1917,380 @@ bool YtMusicClient::getHomeFeed(std::vector<YtShelf>& outShelves) {
 
   nxlog::pushf("getHomeFeed completed: %zu shelves ready for display", outShelves.size());
   return !outShelves.empty();
+}
+
+// =========================================================================
+// OAuth 2.0 Device Flow (Google TV / YouTube on TV) & Sincronización
+// =========================================================================
+
+namespace {
+constexpr const char* kTvOAuthClientId =
+    "861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com";
+constexpr const char* kTvOAuthClientSecret =
+    "SboVhoG9s0rNafixCSGGKXAT";
+
+std::string performFormPost(const std::string& url, const std::string& formBody) {
+  CURL* curl = curl_easy_init();
+  if (!curl) return "";
+
+  std::string responseStr;
+  struct curl_slist* headers = nullptr;
+  headers = curl_slist_append(headers, "Content-Type: application/x-www-form-urlencoded");
+  headers = curl_slist_append(headers, "User-Agent: Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version");
+
+  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+  curl_easy_setopt(curl, CURLOPT_POST, 1L);
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, formBody.c_str());
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(formBody.length()));
+  curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+  curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+  curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 8000L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 12000L);
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseStr);
+  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+
+  CURLcode res = curl_easy_perform(curl);
+  curl_slist_free_all(headers);
+  curl_easy_cleanup(curl);
+
+  if (res != CURLE_OK) return "";
+  return responseStr;
+}
+
+std::string generateUuidV4() {
+  static const char* hex = "0123456789abcdef";
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<int> dist(0, 15);
+  std::string out = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+  for (char& c : out) {
+    if (c == 'x') {
+      c = hex[dist(gen)];
+    } else if (c == 'y') {
+      c = hex[(dist(gen) & 0x3) | 0x8];
+    }
+  }
+  return out;
+}
+} // namespace
+
+bool YtMusicClient::requestDeviceCode(YtDeviceCode& outCode) {
+  std::string uuid = generateUuidV4();
+  std::string body = std::string("client_id=") + kTvOAuthClientId +
+                     "&scope=http://gdata.youtube.com%20https://www.googleapis.com/auth/youtube-paid-content" +
+                     "&device_id=" + uuid +
+                     "&device_model=ytlr::";
+
+  std::string resp = performFormPost("https://www.youtube.com/o/oauth2/device/code", body);
+  if (resp.empty()) return false;
+
+  try {
+    auto j = json::parse(resp);
+    outCode.deviceCode = j.value("device_code", "");
+    outCode.userCode = j.value("user_code", "");
+    outCode.verificationUrl = j.value("verification_url", "https://www.google.com/device");
+    outCode.intervalSec = j.value("interval", 5);
+    outCode.expiresInSec = j.value("expires_in", 1800);
+    if (outCode.deviceCode.empty() || outCode.userCode.empty()) {
+      return false;
+    }
+    nxlog::pushf("YtMusicClient: device code obtained (%s -> %s)",
+                 outCode.userCode.c_str(), outCode.verificationUrl.c_str());
+    return true;
+  } catch (const std::exception& e) {
+    nxlog::pushf("requestDeviceCode parse error: %s", e.what());
+    return false;
+  }
+}
+
+int YtMusicClient::pollDeviceToken(const std::string& deviceCode) {
+  if (deviceCode.empty()) return -1;
+
+  std::string body = std::string("client_id=") + kTvOAuthClientId +
+                     "&client_secret=" + kTvOAuthClientSecret +
+                     "&code=" + deviceCode +
+                     "&grant_type=http://oauth.net/grant_type/device/1.0";
+
+  std::string resp = performFormPost("https://www.youtube.com/o/oauth2/token", body);
+  if (resp.empty()) return 0; // Mantener intentando si hubo hipo de red
+
+  try {
+    auto j = json::parse(resp);
+    if (j.contains("error")) {
+      std::string err = j["error"].is_string() ? j["error"].get<std::string>() : "";
+      if (err == "authorization_pending" || err == "slow_down") {
+        return 0;
+      }
+      nxlog::pushf("pollDeviceToken error: %s", err.c_str());
+      return -1;
+    }
+
+    std::string accessTok = j.value("access_token", "");
+    std::string refreshTok = j.value("refresh_token", "");
+    int expiresIn = j.value("expires_in", 3600);
+    if (accessTok.empty()) return 0;
+
+    {
+      std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+      account_.accessToken = accessTok;
+      if (!refreshTok.empty()) {
+        account_.refreshToken = refreshTok;
+      }
+      account_.expiresAtEpoch = static_cast<int64_t>(std::time(nullptr)) + expiresIn;
+      account_.signedIn = true;
+      account_.name = "YouTube Music";
+    }
+
+    fetchAccountProfile();
+    saveAuthConfig();
+    nxlog::push("YtMusicClient: OAuth device authorization completed and saved!");
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+
+bool YtMusicClient::refreshAccessToken() {
+  std::string refreshTok;
+  {
+    std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+    refreshTok = account_.refreshToken;
+  }
+  if (refreshTok.empty()) return false;
+
+  std::string body = std::string("client_id=") + kTvOAuthClientId +
+                     "&client_secret=" + kTvOAuthClientSecret +
+                     "&refresh_token=" + refreshTok +
+                     "&grant_type=refresh_token";
+
+  std::string resp = performFormPost("https://www.youtube.com/o/oauth2/token", body);
+  if (resp.empty()) return false;
+
+  try {
+    auto j = json::parse(resp);
+    std::string accessTok = j.value("access_token", "");
+    int expiresIn = j.value("expires_in", 3600);
+    if (accessTok.empty()) return false;
+
+    {
+      std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+      account_.accessToken = accessTok;
+      account_.expiresAtEpoch = static_cast<int64_t>(std::time(nullptr)) + expiresIn;
+      account_.signedIn = true;
+    }
+    saveAuthConfig();
+    nxlog::push("YtMusicClient: refreshed OAuth access token");
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool YtMusicClient::fetchAccountProfile() {
+  if (!isSignedIn()) return false;
+
+  auto extractProfileFromJson = [this](const json& j) -> bool {
+    std::string foundName;
+    std::string foundHandle;
+    std::string foundPhoto;
+
+    std::function<void(const json&, int)> walk = [&](const json& node, int depth) {
+      if (depth > 12 || (!foundName.empty() && !foundPhoto.empty())) return;
+      if (node.is_object()) {
+        if (foundName.empty() && node.contains("accountName") && node["accountName"].is_object()) {
+          const auto& an = node["accountName"];
+          if (an.contains("runs") && an["runs"].is_array() && !an["runs"].empty()) {
+            foundName = an["runs"][0].value("text", "");
+          } else if (an.contains("simpleText")) {
+            foundName = an.value("simpleText", "");
+          }
+        }
+        if (foundHandle.empty() && node.contains("channelHandle") && node["channelHandle"].is_object()) {
+          const auto& ch = node["channelHandle"];
+          if (ch.contains("runs") && ch["runs"].is_array() && !ch["runs"].empty()) {
+            foundHandle = ch["runs"][0].value("text", "");
+          } else if (ch.contains("simpleText")) {
+            foundHandle = ch.value("simpleText", "");
+          }
+        }
+        if (foundHandle.empty() && node.contains("accountByline") && node["accountByline"].is_object()) {
+          const auto& ab = node["accountByline"];
+          if (ab.contains("runs") && ab["runs"].is_array() && !ab["runs"].empty()) {
+            foundHandle = ab["runs"][0].value("text", "");
+          } else if (ab.contains("simpleText")) {
+            foundHandle = ab.value("simpleText", "");
+          }
+        }
+        if (foundPhoto.empty() && node.contains("accountPhoto") && node["accountPhoto"].is_object()) {
+          const auto& ap = node["accountPhoto"];
+          if (ap.contains("thumbnails") && ap["thumbnails"].is_array() && !ap["thumbnails"].empty()) {
+            foundPhoto = ap["thumbnails"].back().value("url", "");
+          }
+        }
+        for (auto it = node.begin(); it != node.end(); ++it) {
+          if (it.key() == "trackingParams") continue;
+          walk(it.value(), depth + 1);
+        }
+      } else if (node.is_array()) {
+        for (const auto& elem : node) {
+          walk(elem, depth + 1);
+        }
+      }
+    };
+
+    walk(j, 0);
+    if (!foundName.empty()) {
+      std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+      account_.name = foundName;
+      if (!foundHandle.empty()) account_.handle = foundHandle;
+      if (!foundPhoto.empty()) account_.photoUrl = foundPhoto;
+      return true;
+    }
+    return false;
+  };
+
+  // Consultar account/accounts_list con TVHTML5
+  json tvPayload = {
+      {"context", {
+          {"client", {
+              {"clientName", "TVHTML5"},
+              {"clientVersion", "7.20250101.00.00"},
+              {"hl", I18n::getInstance().getHl()},
+              {"gl", I18n::getInstance().getGl()}
+          }}
+      }}
+  };
+  std::string tvResp = postInnerTube("account/accounts_list", tvPayload.dump());
+  if (!tvResp.empty()) {
+    try {
+      if (extractProfileFromJson(json::parse(tvResp))) {
+        return true;
+      }
+    } catch (...) {}
+  }
+
+  return false;
+}
+
+bool YtMusicClient::getLikedTracks(std::vector<YtTrack>& outTracks,
+                                   std::string& outContinuationToken,
+                                   const std::string& continuationToken) {
+  outTracks.clear();
+  outContinuationToken.clear();
+  if (!isSignedIn()) return false;
+
+  return getPlaylistTracks("VLLM", outTracks, outContinuationToken, continuationToken);
+}
+
+bool YtMusicClient::getLibraryPlaylists(std::vector<YtTrack>& outPlaylists,
+                                        std::string& outContinuationToken,
+                                        const std::string& continuationToken) {
+  outPlaylists.clear();
+  outContinuationToken.clear();
+  if (!isSignedIn()) return false;
+
+  auto fetchTvLibraryBrowse = [this, &outPlaylists, &outContinuationToken](
+                                  const std::string& browseId,
+                                  const std::string& contTok = "") {
+    json tvPayload = {
+        {"context", {
+            {"client", {
+                {"clientName", "TVHTML5"},
+                {"clientVersion", "7.20250101.00.00"},
+                {"hl", I18n::getInstance().getHl()},
+                {"gl", I18n::getInstance().getGl()}
+            }}
+        }}
+    };
+    if (!contTok.empty()) {
+      tvPayload["continuation"] = contTok;
+    } else {
+      tvPayload["browseId"] = browseId;
+    }
+
+    std::string resp = postInnerTube("browse", tvPayload.dump());
+    if (resp.empty()) return;
+
+    try {
+      auto j = json::parse(resp);
+      std::string nextTok = findContinuationToken(j);
+      if (!nextTok.empty() && nextTok != contTok && outContinuationToken.empty()) {
+        outContinuationToken = nextTok;
+      }
+      std::function<void(const json&, int)> walk = [&](const json& node, int depth) {
+        if (depth > 20) return;
+        if (node.is_object()) {
+          if (node.contains("tileRenderer") && node["tileRenderer"].is_object()) {
+            YtTrack item;
+            if (parseTvTile(node["tileRenderer"], item) && item.isPlaylist) {
+              if (item.id != "VLLM" && item.id != "VLWL" && item.id != "VLSE") {
+                bool dup = false;
+                for (const auto& existing : outPlaylists) {
+                  if (existing.id == item.id) {
+                    dup = true;
+                    break;
+                  }
+                }
+                if (!dup) {
+                  outPlaylists.push_back(item);
+                }
+              }
+            }
+            return;
+          }
+          for (auto it = node.begin(); it != node.end(); ++it) {
+            if (it.key() == "trackingParams") continue;
+            walk(it.value(), depth + 1);
+          }
+        } else if (node.is_array()) {
+          for (const auto& elem : node) {
+            walk(elem, depth + 1);
+          }
+        }
+      };
+      walk(j, 0);
+    } catch (const std::exception& e) {
+      nxlog::pushf("getLibraryPlaylists TVHTML5 parse error (%s): %s", browseId.c_str(), e.what());
+    }
+  };
+
+  if (!continuationToken.empty()) {
+    fetchTvLibraryBrowse("FEplaylist_aggregation", continuationToken);
+  } else {
+    fetchTvLibraryBrowse("FEplaylist_aggregation");
+    fetchTvLibraryBrowse("FElibrary");
+  }
+
+  nxlog::pushf("getLibraryPlaylists: loaded %zu playlists/albums from account (hasMore: %s)",
+               outPlaylists.size(), outContinuationToken.empty() ? "NO" : "YES");
+  return !outPlaylists.empty();
+}
+
+bool YtMusicClient::rateTrack(const std::string& videoId, bool like) {
+  if (!isSignedIn() || videoId.empty()) return false;
+
+  json payload = {
+      {"context", {
+          {"client", {
+              {"clientName", "TVHTML5"},
+              {"clientVersion", "7.20250101.00.00"},
+              {"hl", I18n::getInstance().getHl()},
+              {"gl", I18n::getInstance().getGl()}
+          }}
+      }},
+      {"target", {
+          {"videoId", videoId}
+      }}
+  };
+
+  std::string endpoint = like ? "like/like" : "like/removelike";
+  std::string resp = postInnerTube(endpoint, payload.dump());
+  return !resp.empty();
 }
 
 } // namespace switube

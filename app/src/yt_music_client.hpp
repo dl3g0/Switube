@@ -56,6 +56,24 @@ struct AudioStreamUrl {
   bool isDirect = true;
 };
 
+struct YtDeviceCode {
+  std::string deviceCode;
+  std::string userCode;
+  std::string verificationUrl;
+  int intervalSec = 5;
+  int expiresInSec = 1800;
+};
+
+struct YtAccountInfo {
+  bool signedIn = false;
+  std::string name;
+  std::string handle;
+  std::string photoUrl;
+  std::string accessToken;
+  std::string refreshToken;
+  int64_t expiresAtEpoch = 0;
+};
+
 class YtMusicClient {
  public:
   YtMusicClient();
@@ -63,7 +81,7 @@ class YtMusicClient {
 
   bool init();
 
-  // 1. Resuelve la URL directa de audio Opus/AAC mediante el cliente VISIONOS
+  // 1. Resuelve la URL directa de audio Opus/AAC
   bool resolveAudioStream(const std::string& videoId, AudioStreamUrl& outStream);
 
   // 2. Búsqueda de pistas en YouTube Music con filtros y paginación
@@ -79,22 +97,72 @@ class YtMusicClient {
     return searchTracks(query, YtSearchFilter::All, outTracks, dummyToken, "", limit);
   }
 
-  // 3. Home Feed (Recomendaciones, temas populares)
-  bool getHomeFeed(std::vector<YtShelf>& outShelves);
+  // 3. Home Feed (Recomendaciones, temas populares) con paginación
+  bool getHomeFeed(std::vector<YtShelf>& outShelves,
+                   std::string& outContinuationToken,
+                   const std::string& continuationToken = "");
 
-  // 4. Obtener pistas dentro de una playlist o álbum (browseId)
-  bool getPlaylistTracks(const std::string& browseId, std::vector<YtTrack>& outTracks);
+  bool getHomeFeed(std::vector<YtShelf>& outShelves) {
+    std::string dummyToken;
+    return getHomeFeed(outShelves, dummyToken, "");
+  }
+
+  // 4. Obtener pistas dentro de una playlist o álbum (browseId) con paginación
+  bool getPlaylistTracks(const std::string& browseId,
+                         std::vector<YtTrack>& outTracks,
+                         std::string& outContinuationToken,
+                         const std::string& continuationToken = "");
+
+  bool getPlaylistTracks(const std::string& browseId, std::vector<YtTrack>& outTracks) {
+    std::string dummyToken;
+    return getPlaylistTracks(browseId, outTracks, dummyToken, "");
+  }
 
   // 5. Obtener página completa de artista (Canciones principales, álbumes, singles, vídeos, directo, listas, similares)
   bool getArtistPage(const std::string& artistBrowseId, YtArtistPage& outPage);
+
+  // 6. Autenticación OAuth 2.0 Device Flow (estilo Google TV / YouTube on TV) y sincronización
+  bool requestDeviceCode(YtDeviceCode& outCode);
+  // Devuelve: 0 = pendiente, 1 = autorizado con éxito, -1 = expirado o error
+  int pollDeviceToken(const std::string& deviceCode);
+  bool refreshAccessToken();
+  bool fetchAccountProfile();
+  void logout();
+
+  bool isSignedIn() const;
+  YtAccountInfo getAccountInfo() const;
+
+  // 7. Biblioteca y Me gusta de la cuenta vinculada (con soporte de paginación)
+  bool getLikedTracks(std::vector<YtTrack>& outTracks,
+                      std::string& outContinuationToken,
+                      const std::string& continuationToken = "");
+
+  bool getLikedTracks(std::vector<YtTrack>& outTracks) {
+    std::string dummyToken;
+    return getLikedTracks(outTracks, dummyToken, "");
+  }
+
+  bool getLibraryPlaylists(std::vector<YtTrack>& outPlaylists,
+                           std::string& outContinuationToken,
+                           const std::string& continuationToken = "");
+
+  bool getLibraryPlaylists(std::vector<YtTrack>& outPlaylists) {
+    std::string dummyToken;
+    return getLibraryPlaylists(outPlaylists, dummyToken, "");
+  }
+
+  bool rateTrack(const std::string& videoId, bool like);
 
   void setAuthCookies(const std::string& cookies);
 
  private:
   std::string authCookies_;
   std::string visitorData_;
-  std::mutex clientMutex_;
+  YtAccountInfo account_;
+  mutable std::recursive_mutex clientMutex_;
 
+  void loadAuthConfig();
+  void saveAuthConfig();
   void ensureVisitorData();
 
   std::string postInnerTube(const std::string& endpoint, const std::string& jsonBody,

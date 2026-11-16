@@ -53,29 +53,78 @@ void TrackListActivity::onContentAvailable() {
   auto token = alive;
   switube::launchWorkerWithStack([this, token]() {
     std::vector<switube::YtTrack> tracks;
-    bool ok = switube::YtEngine::getInstance().getClient().getPlaylistTracks(collection.id, tracks);
-    nxlog::pushf("TrackListActivity: fetched %zu tracks for collection '%s'", tracks.size(), collection.title.c_str());
+    std::string nextTok;
+    bool ok = switube::YtEngine::getInstance().getClient().getPlaylistTracks(
+        collection.id, tracks, nextTok, "");
+    nxlog::pushf("TrackListActivity: fetched %zu tracks for collection '%s' (hasMore: %s)",
+                 tracks.size(), collection.title.c_str(), nextTok.empty() ? "NO" : "YES");
 
-    brls::sync([this, token, ok, tracks = std::move(tracks)]() mutable {
+    brls::sync([this, token, ok, tracks = std::move(tracks), nextTok]() mutable {
       if (!token->load()) return;
-      showTracks(tracks);
+      continuationToken = nextTok;
+      showTracks(tracks, false);
     });
   });
 }
 
-void TrackListActivity::showTracks(const std::vector<switube::YtTrack>& tracks) {
-  list->clearViews();
+void TrackListActivity::loadMore() {
+  if (continuationToken.empty() || isLoadingMore) return;
+  isLoadingMore = true;
+  std::string tokToFetch = continuationToken;
+  auto token = alive;
 
-  if (tracks.empty()) {
-    subtitle->setText(tr("tracklist.empty_title"));
-    playAllLabel->setText(tr("tracklist.empty_title"));
-    list->addView(swui::makeStatePanel(
-        tr("tracklist.empty_title"),
-        tr("tracklist.empty_desc")));
-    return;
+  switube::launchWorkerWithStack([this, token, tokToFetch]() {
+    std::vector<switube::YtTrack> moreTracks;
+    std::string nextTok;
+    bool ok = switube::YtEngine::getInstance().getClient().getPlaylistTracks(
+        collection.id, moreTracks, nextTok, tokToFetch);
+
+    brls::sync([this, token, ok, moreTracks = std::move(moreTracks), nextTok]() mutable {
+      if (!token->load()) return;
+      isLoadingMore = false;
+      continuationToken = nextTok;
+      if (ok && !moreTracks.empty()) {
+        showTracks(moreTracks, true);
+      }
+    });
+  });
+}
+
+void TrackListActivity::showTracks(const std::vector<switube::YtTrack>& tracks, bool append) {
+  if (!append) {
+    list->clearViews();
+    scrollSentinel = nullptr;
+    currentTracks.clear();
+
+    if (tracks.empty()) {
+      subtitle->setText(tr("tracklist.empty_title"));
+      playAllLabel->setText(tr("tracklist.empty_title"));
+      list->addView(swui::makeStatePanel(
+          tr("tracklist.empty_title"),
+          tr("tracklist.empty_desc")));
+      return;
+    }
+  } else {
+    if (scrollSentinel) {
+      list->removeView(scrollSentinel);
+      scrollSentinel = nullptr;
+    }
   }
 
-  currentTracks = tracks;
+  size_t startIdx = currentTracks.size();
+  for (const auto& t : tracks) {
+    bool dup = false;
+    for (const auto& existing : currentTracks) {
+      if (existing.id == t.id) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) {
+      currentTracks.push_back(t);
+    }
+  }
+
   std::string info = tr("tracklist.songs_count", std::to_string(currentTracks.size()));
   if (!collection.artist.empty()) {
     info += "  |  " + collection.artist;
@@ -87,11 +136,23 @@ void TrackListActivity::showTracks(const std::vector<switube::YtTrack>& tracks) 
   playAll->setBackgroundColor(swui::accent());
   playAllLabel->setTextColor(swui::textPrimary());
 
-  for (size_t i = 0; i < currentTracks.size(); ++i) {
+  for (size_t i = startIdx; i < currentTracks.size(); ++i) {
     auto* row = new swui::TrackRow();
     row->setTrack(currentTracks[i], i, [this, i]() {
       switube::YtEngine::getInstance().playQueue(currentTracks, i);
     });
+    row->getFocusEvent()->subscribe([this, i](brls::View*) {
+      if (!continuationToken.empty() && !isLoadingMore && i + 5 >= currentTracks.size()) {
+        loadMore();
+      }
+    });
     list->addView(row);
+  }
+
+  if (!continuationToken.empty()) {
+    scrollSentinel = new swui::ScrollSentinel([this]() {
+      loadMore();
+    });
+    list->addView(scrollSentinel);
   }
 }

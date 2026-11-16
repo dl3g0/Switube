@@ -51,10 +51,20 @@ class YtEngine {
   void setVolume(float volume);
   void onTrackDeleted(const std::string& trackId);
 
-  // Favoritos
+  // Favoritos y Biblioteca sincronizada
   void toggleFavoriteCurrent();
   bool isFavorite(const std::string& trackId);
   std::vector<YtTrack> getFavorites();
+  std::vector<YtTrack> getUserPlaylists();
+  void syncAccountLibrary();
+  void clearAccountLibrary();
+  bool isSyncingLibrary() const { return syncingLibrary_.load(); }
+  bool hasMoreFavorites() const;
+  bool hasMorePlaylists() const;
+  void loadMoreFavorites();
+  void loadMorePlaylists();
+  bool isLoadingMoreFavorites() const { return loadingMoreFavorites_.load(); }
+  bool isLoadingMorePlaylists() const { return loadingMorePlaylists_.load(); }
 
   // Estado
   PlaybackState getState() const { return state_; }
@@ -76,6 +86,8 @@ class YtEngine {
   void playbackThreadLoop();
   void loadFavorites();
   void saveFavorites();
+  void loadUserPlaylists();
+  void saveUserPlaylists();
 
   YtMusicClient client_;
   PlaybackState state_ = PlaybackState::Stopped;
@@ -83,6 +95,12 @@ class YtEngine {
   std::vector<YtTrack> queue_;
   size_t currentQueueIndex_ = 0;
   std::vector<YtTrack> favorites_;
+  std::vector<YtTrack> userPlaylists_;
+  std::string likedContinuationToken_;
+  std::string playlistsContinuationToken_;
+  std::atomic<bool> syncingLibrary_{false};
+  std::atomic<bool> loadingMoreFavorites_{false};
+  std::atomic<bool> loadingMorePlaylists_{false};
 
   mutable std::recursive_mutex dataMutex_;
   std::vector<std::pair<size_t, EngineObserver>> observers_;

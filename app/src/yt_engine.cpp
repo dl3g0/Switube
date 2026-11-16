@@ -18,6 +18,7 @@ namespace switube {
 namespace {
 constexpr const char* CONFIG_DIR = "/config/Switube";
 constexpr const char* FAVORITES_FILE = "/config/Switube/favorites.json";
+constexpr const char* PLAYLISTS_FILE = "/config/Switube/playlists_cache.json";
 
 std::string findLocalAudioTrack(const std::string& trackId) {
   const char* exts[] = {".m4a", ".opus", ".mp3", ".webm"};
@@ -74,7 +75,13 @@ bool YtEngine::init() {
   });
 
   loadFavorites();
+  loadUserPlaylists();
   isRunning_ = true;
+#ifndef SWITUBE_BACKGROUND_SERVICE
+  if (client_.isSignedIn()) {
+    syncAccountLibrary();
+  }
+#endif
   return true;
 }
 
@@ -82,6 +89,7 @@ void YtEngine::shutdown() {
   isRunning_ = false;
   YtAudioPlayer::getInstance().shutdown();
   saveFavorites();
+  saveUserPlaylists();
 }
 
 size_t YtEngine::addObserver(EngineObserver observer) {
@@ -370,9 +378,12 @@ bool YtEngine::isFavorite(const std::string& trackId) {
 }
 
 void YtEngine::toggleFavoriteCurrent() {
+  std::string targetId;
+  bool nowLiked = false;
   {
     std::lock_guard<std::recursive_mutex> lock(dataMutex_);
     if (nowPlaying_.id.empty()) return;
+    targetId = nowPlaying_.id;
 
     auto it = std::find_if(favorites_.begin(), favorites_.end(),
                            [this](const YtTrack& t) { return t.id == nowPlaying_.id; });
@@ -380,6 +391,7 @@ void YtEngine::toggleFavoriteCurrent() {
     if (it != favorites_.end()) {
       favorites_.erase(it);
       nowPlaying_.isFavorite = false;
+      nowLiked = false;
     } else {
       YtTrack t;
       t.id = nowPlaying_.id;
@@ -388,17 +400,193 @@ void YtEngine::toggleFavoriteCurrent() {
       t.album = nowPlaying_.album;
       t.imageUrl = nowPlaying_.imageUrl;
       t.durationMs = nowPlaying_.durationMs;
-      favorites_.push_back(t);
+      favorites_.insert(favorites_.begin(), t);
       nowPlaying_.isFavorite = true;
+      nowLiked = true;
     }
     saveFavorites();
   }
   notifyObservers();
+
+#ifndef SWITUBE_BACKGROUND_SERVICE
+  if (client_.isSignedIn() && !targetId.empty()) {
+    launchWorkerWithStack([this, targetId, nowLiked]() {
+      client_.rateTrack(targetId, nowLiked);
+    });
+  }
+#endif
 }
 
 std::vector<YtTrack> YtEngine::getFavorites() {
   std::lock_guard<std::recursive_mutex> lock(dataMutex_);
   return favorites_;
+}
+
+std::vector<YtTrack> YtEngine::getUserPlaylists() {
+  std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+  return userPlaylists_;
+}
+
+void YtEngine::clearAccountLibrary() {
+  {
+    std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+    userPlaylists_.clear();
+    likedContinuationToken_.clear();
+    playlistsContinuationToken_.clear();
+    saveUserPlaylists();
+  }
+  notifyObservers();
+}
+
+bool YtEngine::hasMoreFavorites() const {
+  std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+  return !likedContinuationToken_.empty();
+}
+
+bool YtEngine::hasMorePlaylists() const {
+  std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+  return !playlistsContinuationToken_.empty();
+}
+
+void YtEngine::loadMoreFavorites() {
+#ifndef SWITUBE_BACKGROUND_SERVICE
+  if (!client_.isSignedIn() || syncingLibrary_.load()) return;
+  std::string contTok;
+  {
+    std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+    if (likedContinuationToken_.empty()) return;
+    contTok = likedContinuationToken_;
+  }
+  bool expected = false;
+  if (!loadingMoreFavorites_.compare_exchange_strong(expected, true)) return;
+
+  launchWorkerWithStack([this, contTok]() {
+    std::vector<YtTrack> moreLiked;
+    std::string nextTok;
+    bool ok = client_.getLikedTracks(moreLiked, nextTok, contTok);
+
+    bool changed = false;
+    {
+      std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+      likedContinuationToken_ = nextTok;
+      if (ok && !moreLiked.empty()) {
+        for (const auto& t : moreLiked) {
+          bool exists = false;
+          for (const auto& f : favorites_) {
+            if (f.id == t.id) {
+              exists = true;
+              break;
+            }
+          }
+          if (!exists) {
+            favorites_.push_back(t);
+            changed = true;
+          }
+        }
+        if (changed) {
+          saveFavorites();
+        }
+      }
+    }
+
+    loadingMoreFavorites_.store(false);
+    if (changed) {
+      notifyObservers();
+    }
+  });
+#endif
+}
+
+void YtEngine::loadMorePlaylists() {
+#ifndef SWITUBE_BACKGROUND_SERVICE
+  if (!client_.isSignedIn() || syncingLibrary_.load()) return;
+  std::string contTok;
+  {
+    std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+    if (playlistsContinuationToken_.empty()) return;
+    contTok = playlistsContinuationToken_;
+  }
+  bool expected = false;
+  if (!loadingMorePlaylists_.compare_exchange_strong(expected, true)) return;
+
+  launchWorkerWithStack([this, contTok]() {
+    std::vector<YtTrack> morePlaylists;
+    std::string nextTok;
+    bool ok = client_.getLibraryPlaylists(morePlaylists, nextTok, contTok);
+
+    bool changed = false;
+    {
+      std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+      playlistsContinuationToken_ = nextTok;
+      if (ok && !morePlaylists.empty()) {
+        for (const auto& p : morePlaylists) {
+          bool exists = false;
+          for (const auto& cur : userPlaylists_) {
+            if (cur.id == p.id) {
+              exists = true;
+              break;
+            }
+          }
+          if (!exists) {
+            userPlaylists_.push_back(p);
+            changed = true;
+          }
+        }
+        if (changed) {
+          saveUserPlaylists();
+        }
+      }
+    }
+
+    loadingMorePlaylists_.store(false);
+    if (changed) {
+      notifyObservers();
+    }
+  });
+#endif
+}
+
+void YtEngine::syncAccountLibrary() {
+#ifndef SWITUBE_BACKGROUND_SERVICE
+  if (!client_.isSignedIn()) return;
+  bool expected = false;
+  if (!syncingLibrary_.compare_exchange_strong(expected, true)) return;
+  notifyObservers();
+
+  launchWorkerWithStack([this]() {
+    if (client_.getAccountInfo().name.empty() || client_.getAccountInfo().name == "YouTube Music") {
+      client_.fetchAccountProfile();
+    }
+
+    std::vector<YtTrack> liked;
+    std::string likedContTok;
+    bool gotLikes = client_.getLikedTracks(liked, likedContTok, "");
+
+    std::vector<YtTrack> playlists;
+    std::string playlistsContTok;
+    bool gotPlaylists = client_.getLibraryPlaylists(playlists, playlistsContTok, "");
+
+    {
+      std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+      if (gotLikes && !liked.empty()) {
+        likedContinuationToken_ = likedContTok;
+        favorites_ = std::move(liked);
+        if (!nowPlaying_.id.empty()) {
+          nowPlaying_.isFavorite = isFavorite(nowPlaying_.id);
+        }
+        saveFavorites();
+      }
+      if (gotPlaylists) {
+        playlistsContinuationToken_ = playlistsContTok;
+        userPlaylists_ = std::move(playlists);
+        saveUserPlaylists();
+      }
+    }
+
+    syncingLibrary_.store(false);
+    notifyObservers();
+  });
+#endif
 }
 
 void YtEngine::loadFavorites() {
@@ -438,6 +626,49 @@ void YtEngine::saveFavorites() {
           {"album", t.album},
           {"imageUrl", t.imageUrl},
           {"durationMs", t.durationMs}
+      });
+    }
+    f << j.dump(2);
+  } catch (...) {}
+}
+
+void YtEngine::loadUserPlaylists() {
+  std::ifstream f(PLAYLISTS_FILE);
+  if (!f.is_open()) return;
+
+  try {
+    json j;
+    f >> j;
+    userPlaylists_.clear();
+    for (const auto& item : j) {
+      YtTrack t;
+      t.id = item.value("id", "");
+      t.title = item.value("title", "");
+      t.artist = item.value("artist", "");
+      t.imageUrl = item.value("imageUrl", "");
+      t.isPlaylist = item.value("isPlaylist", true);
+      t.isArtist = item.value("isArtist", false);
+      if (!t.id.empty()) {
+        userPlaylists_.push_back(t);
+      }
+    }
+  } catch (...) {}
+}
+
+void YtEngine::saveUserPlaylists() {
+  std::ofstream f(PLAYLISTS_FILE);
+  if (!f.is_open()) return;
+
+  try {
+    json j = json::array();
+    for (const auto& t : userPlaylists_) {
+      j.push_back({
+          {"id", t.id},
+          {"title", t.title},
+          {"artist", t.artist},
+          {"imageUrl", t.imageUrl},
+          {"isPlaylist", t.isPlaylist},
+          {"isArtist", t.isArtist}
       });
     }
     f << j.dump(2);

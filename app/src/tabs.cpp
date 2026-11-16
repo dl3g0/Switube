@@ -59,11 +59,7 @@ HomeTab::HomeTab() : alive(std::make_shared<std::atomic_bool>(true)) {
   top->addView(refreshBtn);
   addView(top);
 
-  statusLabel = swui::makeLabel(tr("home.loading"), 15, swui::textSecondary());
-  statusLabel->setMarginLeft(swui::kPagePadding);
-  statusLabel->setMarginRight(swui::kPagePadding);
-  statusLabel->setMarginBottom(10);
-  addView(statusLabel);
+  statusLabel = subtitleLabel;
 
   auto* scroll = new brls::ScrollingFrame();
   scroll->setGrow(1.0f);
@@ -75,10 +71,22 @@ HomeTab::HomeTab() : alive(std::make_shared<std::atomic_bool>(true)) {
   addView(scroll);
 
   auto token = alive;
+  lastSignedInState = switube::YtEngine::getInstance().getClient().isSignedIn();
   i18nObserverId = switube::I18n::getInstance().addObserver([this, token]() {
     brls::sync([this, token]() {
       if (token->load()) {
         updateLabels();
+        load();
+      }
+    });
+  });
+
+  engineObserverId = switube::YtEngine::getInstance().addObserver([this, token]() {
+    brls::sync([this, token]() {
+      if (!token->load()) return;
+      bool signedIn = switube::YtEngine::getInstance().getClient().isSignedIn();
+      if (signedIn != lastSignedInState) {
+        lastSignedInState = signedIn;
         load();
       }
     });
@@ -90,6 +98,7 @@ HomeTab::HomeTab() : alive(std::make_shared<std::atomic_bool>(true)) {
 HomeTab::~HomeTab() {
   alive->store(false);
   switube::I18n::getInstance().removeObserver(i18nObserverId);
+  switube::YtEngine::getInstance().removeObserver(engineObserverId);
 }
 
 void HomeTab::updateLabels() {
@@ -105,20 +114,25 @@ brls::View* HomeTab::getDefaultFocus() {
 
 void HomeTab::load() {
   statusLabel->setText(tr("home.loading"));
+  continuationToken.clear();
+  isLoadingMore = false;
   auto token = alive;
   launchWorkerWithStack([this, token]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
     try {
       nxlog::push("Fetching Home Feed from YouTube Music...");
       std::vector<switube::YtShelf> shelves;
-      bool ok = switube::YtEngine::getInstance().getClient().getHomeFeed(shelves);
-      nxlog::pushf("Home Feed result: %s (shelves: %zu)", ok ? "OK" : "FAILED", shelves.size());
+      std::string nextTok;
+      bool ok = switube::YtEngine::getInstance().getClient().getHomeFeed(shelves, nextTok, "");
+      nxlog::pushf("Home Feed result: %s (shelves: %zu, hasMore: %s)",
+                   ok ? "OK" : "FAILED", shelves.size(), nextTok.empty() ? "NO" : "YES");
 
-      brls::sync([this, token, ok, shelves]() {
+      brls::sync([this, token, ok, shelves = std::move(shelves), nextTok]() {
         if (!token->load()) return;
+        continuationToken = nextTok;
         if (ok && !shelves.empty()) {
           statusLabel->setText(tr("home.subtitle"));
-          renderHome(shelves);
+          renderHome(shelves, false);
         } else {
           statusLabel->setText(tr("home.error"));
         }
@@ -131,20 +145,71 @@ void HomeTab::load() {
   });
 }
 
-void HomeTab::renderHome(const std::vector<switube::YtShelf>& shelves) {
-  content->clearViews();
+void HomeTab::loadMore() {
+  if (continuationToken.empty() || isLoadingMore) return;
+  isLoadingMore = true;
+  std::string tokToFetch = continuationToken;
+  auto token = alive;
 
-  if (shelves.empty()) {
-    auto* emptyNotice = swui::makeStatePanel(
-        tr("home.empty_title"),
-        tr("home.empty_desc"));
-    content->addView(emptyNotice);
-    return;
+  launchWorkerWithStack([this, token, tokToFetch]() {
+    try {
+      std::vector<switube::YtShelf> moreShelves;
+      std::string nextTok;
+      bool ok = switube::YtEngine::getInstance().getClient().getHomeFeed(moreShelves, nextTok, tokToFetch);
+
+      brls::sync([this, token, ok, moreShelves = std::move(moreShelves), nextTok]() {
+        if (!token->load()) return;
+        isLoadingMore = false;
+        continuationToken = nextTok;
+        if (ok && !moreShelves.empty()) {
+          renderHome(moreShelves, true);
+        }
+      });
+    } catch (...) {
+      brls::sync([this, token]() {
+        if (token->load()) isLoadingMore = false;
+      });
+    }
+  });
+}
+
+void HomeTab::renderHome(const std::vector<switube::YtShelf>& shelves, bool append) {
+  if (!append) {
+    content->clearViews();
+    scrollSentinel = nullptr;
+    currentShelves.clear();
+
+    if (shelves.empty()) {
+      auto* emptyNotice = swui::makeStatePanel(
+          tr("home.empty_title"),
+          tr("home.empty_desc"));
+      content->addView(emptyNotice);
+      return;
+    }
+  } else {
+    if (scrollSentinel) {
+      content->removeView(scrollSentinel);
+      scrollSentinel = nullptr;
+    }
   }
 
+  size_t startShelfIdx = currentShelves.size();
   for (const auto& shelf : shelves) {
     if (shelf.tracks.empty()) continue;
+    bool dup = false;
+    for (const auto& existing : currentShelves) {
+      if (existing.title == shelf.title) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) {
+      currentShelves.push_back(shelf);
+    }
+  }
 
+  for (size_t sIdx = startShelfIdx; sIdx < currentShelves.size(); ++sIdx) {
+    const auto& shelf = currentShelves[sIdx];
     auto* section = new swui::HorizontalSection(shelf.title, "");
     for (size_t i = 0; i < shelf.tracks.size(); ++i) {
       const auto& track = shelf.tracks[i];
@@ -159,9 +224,21 @@ void HomeTab::renderHome(const std::vector<switube::YtShelf>& shelves) {
           switube::YtEngine::getInstance().playTrack(track);
         }
       });
+      card->getFocusEvent()->subscribe([this, sIdx](brls::View*) {
+        if (!continuationToken.empty() && !isLoadingMore && sIdx + 2 >= currentShelves.size()) {
+          loadMore();
+        }
+      });
       section->addCard(card);
     }
     content->addView(section);
+  }
+
+  if (!continuationToken.empty()) {
+    scrollSentinel = new swui::ScrollSentinel([this]() {
+      loadMore();
+    });
+    content->addView(scrollSentinel);
   }
 }
 
@@ -311,9 +388,11 @@ void SearchTab::updateFilterChips() {
 void SearchTab::search(const std::string& query) {
   currentQuery = query;
   continuationToken.clear();
+  isLoadingMore = false;
   currentResults.clear();
   content->clearViews();
   loadMoreBtn = nullptr;
+  scrollSentinel = nullptr;
 
   statusLabel->setText(tr("search.searching", query));
 
@@ -347,7 +426,8 @@ void SearchTab::search(const std::string& query) {
 }
 
 void SearchTab::loadMore() {
-  if (continuationToken.empty() || currentQuery.empty()) return;
+  if (continuationToken.empty() || currentQuery.empty() || isLoadingMore) return;
+  isLoadingMore = true;
 
   if (loadMoreBtn) {
     loadMoreBtn->setFocusable(false);
@@ -367,16 +447,26 @@ void SearchTab::loadMore() {
 
       brls::sync([this, token, ok, newTracks = std::move(newTracks), nextTok = std::move(nextTok)]() mutable {
         if (!token->load()) return;
+        isLoadingMore = false;
         continuationToken = nextTok;
         if (ok && !newTracks.empty()) {
           renderResults(newTracks, true);
-        } else if (loadMoreBtn) {
-          content->removeView(loadMoreBtn);
-          loadMoreBtn = nullptr;
+        } else {
+          if (loadMoreBtn) {
+            content->removeView(loadMoreBtn);
+            loadMoreBtn = nullptr;
+          }
+          if (scrollSentinel) {
+            content->removeView(scrollSentinel);
+            scrollSentinel = nullptr;
+          }
         }
       });
     } catch (const std::exception& e) {
       nxlog::pushf("SearchTab loadMore error: %s", e.what());
+      brls::sync([this, token]() {
+        if (token->load()) isLoadingMore = false;
+      });
     }
   });
 }
@@ -386,14 +476,30 @@ void SearchTab::renderResults(const std::vector<switube::YtTrack>& tracks, bool 
     content->clearViews();
     currentResults.clear();
     loadMoreBtn = nullptr;
-  } else if (loadMoreBtn) {
-    content->removeView(loadMoreBtn);
-    loadMoreBtn = nullptr;
+    scrollSentinel = nullptr;
+  } else {
+    if (loadMoreBtn) {
+      content->removeView(loadMoreBtn);
+      loadMoreBtn = nullptr;
+    }
+    if (scrollSentinel) {
+      content->removeView(scrollSentinel);
+      scrollSentinel = nullptr;
+    }
   }
 
   size_t startIdx = currentResults.size();
   for (size_t i = 0; i < tracks.size(); ++i) {
-    currentResults.push_back(tracks[i]);
+    bool dup = false;
+    for (const auto& existing : currentResults) {
+      if (existing.id == tracks[i].id) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) {
+      currentResults.push_back(tracks[i]);
+    }
   }
 
   for (size_t i = startIdx; i < currentResults.size(); ++i) {
@@ -419,23 +525,21 @@ void SearchTab::renderResults(const std::vector<switube::YtTrack>& tracks, bool 
         }
       }
     });
+    row->getFocusEvent()->subscribe([this, i](brls::View*) {
+      if (!continuationToken.empty() && !isLoadingMore && i + 5 >= currentResults.size()) {
+        loadMore();
+      }
+    });
     content->addView(row);
   }
 
   statusLabel->setText(tr("search.results_count", currentQuery, std::to_string(currentResults.size())));
 
   if (!continuationToken.empty()) {
-    loadMoreBtn = swui::makeActionButton(
-        tr("search.load_more"),
-        [this](brls::View*) {
-          loadMore();
-          return true;
-        },
-        false);
-    loadMoreBtn->setWidth(300);
-    loadMoreBtn->setMarginTop(18);
-    loadMoreBtn->setMarginBottom(18);
-    content->addView(loadMoreBtn);
+    scrollSentinel = new swui::ScrollSentinel([this]() {
+      loadMore();
+    });
+    content->addView(scrollSentinel);
   }
 }
 
@@ -450,9 +554,56 @@ LibraryTab::LibraryTab() : alive(std::make_shared<std::atomic_bool>(true)) {
   auto* top = new brls::Box();
   top->setAxis(brls::Axis::ROW);
   top->setAlignItems(brls::AlignItems::CENTER);
-  top->setPadding(20, swui::kPagePadding, 12, swui::kPagePadding);
+  top->setPadding(20, swui::kPagePadding, 10, swui::kPagePadding);
   top->addView(makeHeading(tr("library.title"), tr("library.subtitle"), &titleLabel, &subtitleLabel));
+
+  syncBtn = swui::makeActionButton(
+      tr("library.sync"),
+      [this](brls::View*) {
+        if (switube::YtEngine::getInstance().getClient().isSignedIn()) {
+          switube::YtEngine::getInstance().syncAccountLibrary();
+          brls::Application::notify(tr("library.syncing"));
+        } else {
+          renderedFavoriteIds.clear();
+          renderedPlaylistIds.clear();
+          refresh();
+        }
+        return true;
+      },
+      false, &syncBtnLabel);
+  syncBtn->setWidth(160);
+  top->addView(syncBtn);
   addView(top);
+
+  auto* chipsRow = new brls::Box();
+  chipsRow->setAxis(brls::Axis::ROW);
+  chipsRow->setAlignItems(brls::AlignItems::CENTER);
+  chipsRow->setPadding(0, swui::kPagePadding, 12, swui::kPagePadding);
+
+  chipFavorites = new swui::FilterChip("♥ " + tr("library.tab_favorites"), [this]() {
+    if (showPlaylists) {
+      showPlaylists = false;
+      chipFavorites->setSelected(true);
+      chipPlaylists->setSelected(false);
+      refresh();
+    }
+  });
+  chipFavorites->setSelected(true);
+  chipFavorites->setMarginRight(12);
+  chipsRow->addView(chipFavorites);
+
+  chipPlaylists = new swui::FilterChip("♫ " + tr("library.tab_playlists"), [this]() {
+    if (!showPlaylists) {
+      showPlaylists = true;
+      chipFavorites->setSelected(false);
+      chipPlaylists->setSelected(true);
+      refresh();
+    }
+  });
+  chipPlaylists->setSelected(false);
+  chipsRow->addView(chipPlaylists);
+
+  addView(chipsRow);
 
   auto* scroll = new brls::ScrollingFrame();
   scroll->setGrow(1.0f);
@@ -467,16 +618,32 @@ LibraryTab::LibraryTab() : alive(std::make_shared<std::atomic_bool>(true)) {
   observerId = switube::YtEngine::getInstance().addObserver([this, token] {
     brls::sync([this, token] {
       if (!token->load()) return;
-      auto favs = switube::YtEngine::getInstance().getFavorites();
-      if (favs.size() == renderedFavoriteIds.size()) {
-        bool same = true;
-        for (size_t i = 0; i < favs.size(); ++i) {
-          if (favs[i].id != renderedFavoriteIds[i]) {
-            same = false;
-            break;
+      if (lastRenderedMode == showPlaylists && !content->getChildren().empty()) {
+        if (!showPlaylists) {
+          auto favs = switube::YtEngine::getInstance().getFavorites();
+          if (favs.size() == renderedFavoriteIds.size()) {
+            bool same = true;
+            for (size_t i = 0; i < favs.size(); ++i) {
+              if (favs[i].id != renderedFavoriteIds[i]) {
+                same = false;
+                break;
+              }
+            }
+            if (same) return;
+          }
+        } else {
+          auto pls = switube::YtEngine::getInstance().getUserPlaylists();
+          if (pls.size() == renderedPlaylistIds.size()) {
+            bool same = true;
+            for (size_t i = 0; i < pls.size(); ++i) {
+              if (pls[i].id != renderedPlaylistIds[i]) {
+                same = false;
+                break;
+              }
+            }
+            if (same) return;
           }
         }
-        if (same && !content->getChildren().empty()) return;
       }
       refresh();
     });
@@ -486,6 +653,7 @@ LibraryTab::LibraryTab() : alive(std::make_shared<std::atomic_bool>(true)) {
     brls::sync([this, token]() {
       if (token->load()) {
         renderedFavoriteIds.clear();
+        renderedPlaylistIds.clear();
         updateLabels();
         refresh();
       }
@@ -515,59 +683,196 @@ LibraryTab::~LibraryTab() {
 void LibraryTab::updateLabels() {
   if (titleLabel) titleLabel->setText(tr("library.title"));
   if (subtitleLabel) subtitleLabel->setText(tr("library.subtitle"));
+  if (syncBtnLabel) syncBtnLabel->setText(tr("library.sync"));
+  if (chipFavorites) chipFavorites->setText("♥ " + tr("library.tab_favorites"));
+  if (chipPlaylists) chipPlaylists->setText("♫ " + tr("library.tab_playlists"));
 }
 
 brls::View* LibraryTab::getDefaultFocus() {
   if (!content->getChildren().empty()) return content->getChildren()[0];
+  if (chipFavorites) return chipFavorites;
   return brls::Box::getDefaultFocus();
 }
 
 void LibraryTab::refresh() {
-  bool hadFocus = this->isFocused() || this->isChildFocused();
-  size_t focusedChildIdx = 0;
-  if (hadFocus && content) {
-    const auto& children = content->getChildren();
-    for (size_t i = 0; i < children.size(); ++i) {
-      if (children[i] == brls::Application::getCurrentFocus()) {
-        focusedChildIdx = i;
-        break;
+  auto& engine = switube::YtEngine::getInstance();
+
+  if (scrollSentinel) {
+    content->removeView(scrollSentinel);
+    scrollSentinel = nullptr;
+  }
+
+  if (showPlaylists) {
+    auto playlists = engine.getUserPlaylists();
+
+    // Verificar si es una extensión por paginación (append sin limpiar vistas)
+    bool isAppend = (lastRenderedMode == showPlaylists &&
+                     !renderedPlaylistIds.empty() &&
+                     playlists.size() > renderedPlaylistIds.size());
+    if (isAppend) {
+      for (size_t i = 0; i < renderedPlaylistIds.size(); ++i) {
+        if (playlists[i].id != renderedPlaylistIds[i]) {
+          isAppend = false;
+          break;
+        }
       }
     }
-    brls::Application::giveFocus(nullptr);
-  }
 
-  content->clearViews();
-  auto favorites = switube::YtEngine::getInstance().getFavorites();
-  renderedFavoriteIds.clear();
-  renderedFavoriteIds.reserve(favorites.size());
-  for (const auto& f : favorites) {
-    renderedFavoriteIds.push_back(f.id);
-  }
+    size_t startIdx = 0;
+    bool hadFocus = false;
+    size_t focusedChildIdx = 0;
 
-  if (favorites.empty()) {
-    auto* emptyNotice = swui::makeStatePanel(
-        tr("library.empty_title"),
-        tr("library.empty_desc"));
-    emptyNotice->setFocusable(true);
-    content->addView(emptyNotice);
-    if (hadFocus) {
-      brls::Application::giveFocus(emptyNotice);
+    if (isAppend) {
+      startIdx = renderedPlaylistIds.size();
+    } else {
+      hadFocus = this->isFocused() || this->isChildFocused();
+      if (hadFocus && content) {
+        const auto& children = content->getChildren();
+        for (size_t i = 0; i < children.size(); ++i) {
+          if (children[i] == brls::Application::getCurrentFocus()) {
+            focusedChildIdx = i;
+            break;
+          }
+        }
+        brls::Application::giveFocus(nullptr);
+      }
+      content->clearViews();
     }
-    return;
-  }
 
-  for (size_t i = 0; i < favorites.size(); ++i) {
-    const auto& track = favorites[i];
-    auto* row = new swui::TrackRow();
-    row->setTrack(track, i, [track, favorites, i]() {
-      switube::YtEngine::getInstance().playQueue(favorites, i);
-    });
-    content->addView(row);
-  }
+    lastRenderedMode = showPlaylists;
+    renderedPlaylistIds.clear();
+    renderedPlaylistIds.reserve(playlists.size());
+    for (const auto& p : playlists) {
+      renderedPlaylistIds.push_back(p.id);
+    }
 
-  if (hadFocus && !content->getChildren().empty()) {
-    size_t targetIdx = std::min(focusedChildIdx, content->getChildren().size() - 1);
-    brls::Application::giveFocus(content->getChildren()[targetIdx]);
+    if (playlists.empty()) {
+      auto* emptyNotice = swui::makeStatePanel(
+          tr("library.playlists_empty_title"),
+          tr("library.playlists_empty_desc"));
+      emptyNotice->setFocusable(true);
+      content->addView(emptyNotice);
+      if (hadFocus) {
+        brls::Application::giveFocus(emptyNotice);
+      }
+      return;
+    }
+
+    for (size_t i = startIdx; i < playlists.size(); ++i) {
+      const auto& item = playlists[i];
+      auto* row = new swui::TrackRow();
+      row->setTrack(item, i, [item]() {
+        if (item.isArtist) {
+          brls::Application::pushActivity(new ArtistActivity(item.id, item.title, item.imageUrl));
+        } else {
+          brls::Application::pushActivity(new TrackListActivity(item));
+        }
+      });
+      row->getFocusEvent()->subscribe([this, i](brls::View*) {
+        auto& eng = switube::YtEngine::getInstance();
+        if (eng.hasMorePlaylists() && !eng.isLoadingMorePlaylists() && i + 5 >= renderedPlaylistIds.size()) {
+          eng.loadMorePlaylists();
+        }
+      });
+      content->addView(row);
+    }
+
+    if (engine.hasMorePlaylists()) {
+      scrollSentinel = new swui::ScrollSentinel([]() {
+        switube::YtEngine::getInstance().loadMorePlaylists();
+      });
+      content->addView(scrollSentinel);
+    }
+
+    if (!isAppend && hadFocus && !content->getChildren().empty()) {
+      size_t targetIdx = std::min(focusedChildIdx, content->getChildren().size() - 1);
+      brls::Application::giveFocus(content->getChildren()[targetIdx]);
+    }
+  } else {
+    auto favorites = engine.getFavorites();
+
+    // Verificar si es una extensión por paginación (append sin limpiar vistas)
+    bool isAppend = (lastRenderedMode == showPlaylists &&
+                     !renderedFavoriteIds.empty() &&
+                     favorites.size() > renderedFavoriteIds.size());
+    if (isAppend) {
+      for (size_t i = 0; i < renderedFavoriteIds.size(); ++i) {
+        if (favorites[i].id != renderedFavoriteIds[i]) {
+          isAppend = false;
+          break;
+        }
+      }
+    }
+
+    size_t startIdx = 0;
+    bool hadFocus = false;
+    size_t focusedChildIdx = 0;
+
+    if (isAppend) {
+      startIdx = renderedFavoriteIds.size();
+    } else {
+      hadFocus = this->isFocused() || this->isChildFocused();
+      if (hadFocus && content) {
+        const auto& children = content->getChildren();
+        for (size_t i = 0; i < children.size(); ++i) {
+          if (children[i] == brls::Application::getCurrentFocus()) {
+            focusedChildIdx = i;
+            break;
+          }
+        }
+        brls::Application::giveFocus(nullptr);
+      }
+      content->clearViews();
+    }
+
+    lastRenderedMode = showPlaylists;
+    renderedFavoriteIds.clear();
+    renderedFavoriteIds.reserve(favorites.size());
+    for (const auto& f : favorites) {
+      renderedFavoriteIds.push_back(f.id);
+    }
+
+    if (favorites.empty()) {
+      auto* emptyNotice = swui::makeStatePanel(
+          tr("library.empty_title"),
+          tr("library.empty_desc"));
+      emptyNotice->setFocusable(true);
+      content->addView(emptyNotice);
+      if (hadFocus) {
+        brls::Application::giveFocus(emptyNotice);
+      }
+      return;
+    }
+
+    for (size_t i = startIdx; i < favorites.size(); ++i) {
+      const auto& track = favorites[i];
+      auto* row = new swui::TrackRow();
+      row->setTrack(track, i, [i]() {
+        auto allFavs = switube::YtEngine::getInstance().getFavorites();
+        if (i < allFavs.size()) {
+          switube::YtEngine::getInstance().playQueue(allFavs, i);
+        }
+      });
+      row->getFocusEvent()->subscribe([this, i](brls::View*) {
+        auto& eng = switube::YtEngine::getInstance();
+        if (eng.hasMoreFavorites() && !eng.isLoadingMoreFavorites() && i + 5 >= renderedFavoriteIds.size()) {
+          eng.loadMoreFavorites();
+        }
+      });
+      content->addView(row);
+    }
+
+    if (engine.hasMoreFavorites()) {
+      scrollSentinel = new swui::ScrollSentinel([]() {
+        switube::YtEngine::getInstance().loadMoreFavorites();
+      });
+      content->addView(scrollSentinel);
+    }
+
+    if (!isAppend && hadFocus && !content->getChildren().empty()) {
+      size_t targetIdx = std::min(focusedChildIdx, content->getChildren().size() - 1);
+      brls::Application::giveFocus(content->getChildren()[targetIdx]);
+    }
   }
 }
 
@@ -909,6 +1214,30 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
   nextBtn->setHeight(52);
   nextBtn->setCornerRadius(26);
 
+  favBtn = new brls::Box();
+  favBtn->setFocusable(true);
+  favBtn->setWidth(64);
+  favBtn->setHeight(52);
+  favBtn->setCornerRadius(26);
+  favBtn->setHighlightCornerRadius(26);
+  favBtn->setBackgroundColor(swui::surfaceRaised());
+  favBtn->setAlignItems(brls::AlignItems::CENTER);
+  favBtn->setJustifyContent(brls::JustifyContent::CENTER);
+  favBtn->setMarginLeft(18);
+  favBtn->addGestureRecognizer(new brls::TapGestureRecognizer(favBtn));
+
+  favBtnLabel = swui::makeLabel("♡", 24, swui::textPrimary(), true);
+  favBtn->addView(favBtnLabel);
+
+  favBtn->registerClickAction([](brls::View*) {
+    switube::YtEngine::getInstance().toggleFavoriteCurrent();
+    return true;
+  });
+  favBtn->registerAction("Me gusta", brls::BUTTON_A, [](brls::View*) {
+    switube::YtEngine::getInstance().toggleFavoriteCurrent();
+    return true;
+  });
+
   downloadBtn = new brls::Box();
   downloadBtn->setFocusable(true);
   downloadBtn->setWidth(64);
@@ -918,7 +1247,7 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
   downloadBtn->setBackgroundColor(swui::surfaceRaised());
   downloadBtn->setAlignItems(brls::AlignItems::CENTER);
   downloadBtn->setJustifyContent(brls::JustifyContent::CENTER);
-  downloadBtn->setMarginLeft(18);
+  downloadBtn->setMarginLeft(14);
   downloadBtn->addGestureRecognizer(new brls::TapGestureRecognizer(downloadBtn));
 
   downloadBadge = new swui::DownloadBadge(30.0f);
@@ -936,6 +1265,7 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
   controls->addView(prevBtn);
   controls->addView(playBtn);
   controls->addView(nextBtn);
+  controls->addView(favBtn);
   controls->addView(downloadBtn);
   rightCol->addView(controls);
 
@@ -966,6 +1296,11 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
 
   registerAction("Descargar", brls::BUTTON_X, [this](brls::View*) {
     handleDownloadCurrentTrack();
+    return true;
+  });
+
+  registerAction("Me gusta", brls::BUTTON_Y, [](brls::View*) {
+    switube::YtEngine::getInstance().toggleFavoriteCurrent();
     return true;
   });
 
@@ -1147,6 +1482,12 @@ void NowPlayingTab::refresh() {
       swui::loadRemoteImage(artwork, now.imageUrl, 544);
     }
 
+    if (favBtn && favBtnLabel) {
+      favBtn->setVisibility(brls::Visibility::VISIBLE);
+      favBtnLabel->setText(now.isFavorite ? "♥" : "♡");
+      favBtnLabel->setTextColor(now.isFavorite ? swui::accent() : swui::textPrimary());
+    }
+
     if (downloadBtn && downloadBadge) {
       downloadBtn->setVisibility(brls::Visibility::VISIBLE);
       auto& dm = switube::DownloadManager::getInstance();
@@ -1168,6 +1509,7 @@ void NowPlayingTab::refresh() {
       }
     }
   } else {
+    if (favBtn) favBtn->setVisibility(brls::Visibility::GONE);
     if (downloadBtn) downloadBtn->setVisibility(brls::Visibility::GONE);
     contextLabel->setText(tr("now_playing.title"));
     titleLabel->setText(tr("now_playing.no_playback"));
@@ -1205,7 +1547,20 @@ SettingsTab::SettingsTab() : alive(std::make_shared<std::atomic_bool>(true)) {
   scroll->setContentView(content);
   addView(scroll);
 
-  // 1. Selector de Idioma (Español / English)
+  // 1. Cuenta de YouTube Music (Google TV QR Login)
+  accountHeader = new brls::Header();
+  accountHeader->setTitle(tr("settings.account_header"));
+  accountHeader->setSubtitle(tr("settings.account_desc"));
+  accountHeader->setHeight(48);
+  accountHeader->setMarginBottom(10);
+  content->addView(accountHeader);
+
+  accountContainer = new brls::Box();
+  accountContainer->setAxis(brls::Axis::COLUMN);
+  accountContainer->setMarginBottom(24);
+  content->addView(accountContainer);
+
+  // 2. Selector de Idioma (Español / English)
   langHeader = new brls::Header();
   langHeader->setTitle(tr("settings.language_header"));
   langHeader->setSubtitle(tr("settings.language_desc"));
@@ -1239,7 +1594,7 @@ SettingsTab::SettingsTab() : alive(std::make_shared<std::atomic_bool>(true)) {
 
   content->addView(langRow);
 
-  // 2. Información y Créditos
+  // 3. Información y Créditos
   auto* infoBox = swui::makeStatePanel(
       tr("settings.about_title"),
       tr("settings.about_desc"),
@@ -1249,11 +1604,27 @@ SettingsTab::SettingsTab() : alive(std::make_shared<std::atomic_bool>(true)) {
   infoBox->setMarginBottom(16);
   content->addView(infoBox);
 
+  refreshAccountSection();
+
   auto token = alive;
   i18nObserverId = switube::I18n::getInstance().addObserver([this, token]() {
     brls::sync([this, token]() {
       if (token->load()) {
         updateLabels();
+        refreshAccountSection();
+      }
+    });
+  });
+
+  engineObserverId = switube::YtEngine::getInstance().addObserver([this, token]() {
+    brls::sync([this, token]() {
+      if (!token->load() || waitingForQr) return;
+      auto& eng = switube::YtEngine::getInstance();
+      bool signedIn = eng.getClient().isSignedIn();
+      bool syncing = eng.isSyncingLibrary();
+      std::string accName = eng.getClient().getAccountInfo().name;
+      if (signedIn != lastAccountSignedIn || syncing != lastAccountSyncing || accName != lastAccountName) {
+        refreshAccountSection();
       }
     });
   });
@@ -1261,10 +1632,285 @@ SettingsTab::SettingsTab() : alive(std::make_shared<std::atomic_bool>(true)) {
 
 SettingsTab::~SettingsTab() {
   alive->store(false);
+  if (qrPollingActive) {
+    qrPollingActive->store(false);
+  }
   switube::I18n::getInstance().removeObserver(i18nObserverId);
+  switube::YtEngine::getInstance().removeObserver(engineObserverId);
+}
+
+void SettingsTab::startQrLinking() {
+  if (waitingForQr) return;
+  waitingForQr = true;
+  if (qrPollingActive) {
+    qrPollingActive->store(false);
+  }
+  auto pollToken = std::make_shared<std::atomic_bool>(true);
+  qrPollingActive = pollToken;
+  activeDeviceCode = switube::YtDeviceCode{};
+  refreshAccountSection();
+
+  auto tabAlive = alive;
+  launchWorkerWithStack([this, tabAlive, pollToken]() {
+    switube::YtDeviceCode code;
+    bool ok = switube::YtEngine::getInstance().getClient().requestDeviceCode(code);
+    if (!tabAlive->load() || !pollToken->load()) return;
+
+    if (!ok) {
+      brls::sync([this, tabAlive, pollToken]() {
+        if (!tabAlive->load() || !pollToken->load()) return;
+        waitingForQr = false;
+        brls::Application::notify("Error de conexión al generar el código QR");
+        refreshAccountSection();
+      });
+      return;
+    }
+
+    brls::sync([this, tabAlive, pollToken, code]() {
+      if (!tabAlive->load() || !pollToken->load()) return;
+      activeDeviceCode = code;
+      refreshAccountSection();
+    });
+
+    int intervalSec = std::max(4, code.intervalSec);
+    int elapsedSec = 0;
+    while (tabAlive->load() && pollToken->load() && elapsedSec < code.expiresInSec) {
+      for (int s = 0; s < intervalSec * 10 && tabAlive->load() && pollToken->load(); ++s) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+      if (!tabAlive->load() || !pollToken->load()) return;
+      elapsedSec += intervalSec;
+
+      int status = switube::YtEngine::getInstance().getClient().pollDeviceToken(code.deviceCode);
+      if (status == 1) {
+        brls::sync([this, tabAlive, pollToken]() {
+          if (!tabAlive->load() || !pollToken->load()) return;
+          pollToken->store(false);
+          waitingForQr = false;
+          switube::YtEngine::getInstance().syncAccountLibrary();
+          brls::Application::notify(tr("settings.account_notify_linked"));
+          refreshAccountSection();
+        });
+        return;
+      } else if (status < 0) {
+        brls::sync([this, tabAlive, pollToken]() {
+          if (!tabAlive->load() || !pollToken->load()) return;
+          pollToken->store(false);
+          waitingForQr = false;
+          refreshAccountSection();
+        });
+        return;
+      }
+    }
+  });
+}
+
+void SettingsTab::cancelQrLinking() {
+  if (qrPollingActive) {
+    qrPollingActive->store(false);
+  }
+  waitingForQr = false;
+  activeDeviceCode = switube::YtDeviceCode{};
+  refreshAccountSection();
+}
+
+void SettingsTab::refreshAccountSection() {
+  if (!accountContainer) return;
+
+  bool hadAccountFocus = accountContainer->isFocused() || accountContainer->isChildFocused();
+  if (hadAccountFocus) {
+    brls::Application::giveFocus(nullptr);
+  }
+
+  accountContainer->clearViews();
+  primaryAccountFocus = nullptr;
+
+  auto& engine = switube::YtEngine::getInstance();
+  auto& client = engine.getClient();
+  lastAccountSignedIn = client.isSignedIn();
+  lastAccountSyncing = engine.isSyncingLibrary();
+  lastAccountName = client.getAccountInfo().name;
+
+  auto* card = new brls::Box();
+  card->setCornerRadius(22);
+  card->setBackgroundColor(swui::surfaceRaised());
+  card->setAxis(brls::Axis::COLUMN);
+  card->setPadding(22, 24, 22, 24);
+
+  if (waitingForQr) {
+    auto* row = new brls::Box();
+    row->setAxis(brls::Axis::ROW);
+    row->setAlignItems(brls::AlignItems::CENTER);
+
+    // Marco blanco para que el código QR tenga contraste perfecto al escanear con la cámara
+    auto* qrBox = new brls::Box();
+    qrBox->setWidth(188);
+    qrBox->setHeight(188);
+    qrBox->setCornerRadius(16);
+    qrBox->setBackgroundColor(nvgRGB(255, 255, 255));
+    qrBox->setAlignItems(brls::AlignItems::CENTER);
+    qrBox->setJustifyContent(brls::JustifyContent::CENTER);
+    qrBox->setMarginRight(26);
+
+    auto* qrImg = new brls::Image();
+    qrImg->setWidth(172);
+    qrImg->setHeight(172);
+    qrImg->setScalingType(brls::ImageScalingType::FIT);
+    qrBox->addView(qrImg);
+
+    if (!activeDeviceCode.userCode.empty()) {
+      std::string targetUrl = "https://www.google.com/device?user_code=" + activeDeviceCode.userCode;
+      std::string qrApiUrl =
+          "https://api.qrserver.com/v1/create-qr-code/?size=280x280&margin=8&data=https%3A%2F%2Fwww.google.com%2Fdevice%3Fuser_code%3D" +
+          activeDeviceCode.userCode;
+      swui::loadRemoteImage(qrImg, qrApiUrl, 280);
+    }
+
+    row->addView(qrBox);
+
+    auto* infoCol = new brls::Box();
+    infoCol->setAxis(brls::Axis::COLUMN);
+    infoCol->setGrow(1.0f);
+
+    auto* step1 = swui::makeLabel(tr("settings.account_qr_step1"), 15, swui::textSecondary());
+    infoCol->addView(step1);
+
+    auto* urlLabel = swui::makeLabel("google.com/device  (o youtube.com/activate)", 18, swui::accent(), true);
+    urlLabel->setMarginTop(4);
+    urlLabel->setMarginBottom(12);
+    infoCol->addView(urlLabel);
+
+    auto* step2 = swui::makeLabel(tr("settings.account_qr_step2"), 15, swui::textSecondary());
+    infoCol->addView(step2);
+
+    std::string codeDisplay = activeDeviceCode.userCode.empty() ? "..." : activeDeviceCode.userCode;
+    auto* codeLabel = swui::makeLabel(codeDisplay, 30, swui::textPrimary(), true);
+    codeLabel->setMarginTop(6);
+    codeLabel->setMarginBottom(10);
+    infoCol->addView(codeLabel);
+
+    auto* waitLabel = swui::makeLabel(tr("settings.account_qr_waiting"), 14, swui::textSecondary(), true);
+    waitLabel->setMarginBottom(14);
+    infoCol->addView(waitLabel);
+
+    auto* cancelBtn = swui::makeActionButton(
+        tr("settings.account_cancel_btn"),
+        [this](brls::View*) {
+          cancelQrLinking();
+          return true;
+        },
+        false);
+    cancelBtn->setWidth(180);
+    infoCol->addView(cancelBtn);
+    primaryAccountFocus = cancelBtn;
+
+    row->addView(infoCol);
+    card->addView(row);
+  } else if (client.isSignedIn()) {
+    auto info = client.getAccountInfo();
+
+    auto* profileRow = new brls::Box();
+    profileRow->setAxis(brls::Axis::ROW);
+    profileRow->setAlignItems(brls::AlignItems::CENTER);
+    profileRow->setMarginBottom(16);
+
+    auto* avatar = new brls::Image();
+    avatar->setWidth(64);
+    avatar->setHeight(64);
+    avatar->setCornerRadius(32);
+    avatar->setScalingType(brls::ImageScalingType::FILL);
+    avatar->setMarginRight(18);
+    if (!info.photoUrl.empty()) {
+      swui::loadRemoteImage(avatar, info.photoUrl, 160);
+    }
+    profileRow->addView(avatar);
+
+    auto* textCol = new brls::Box();
+    textCol->setAxis(brls::Axis::COLUMN);
+    textCol->setGrow(1.0f);
+
+    std::string dispName = info.name.empty() ? "YouTube Music" : info.name;
+    auto* nameLbl = swui::makeLabel(dispName, 21, swui::textPrimary(), true);
+    textCol->addView(nameLbl);
+
+    if (!info.handle.empty()) {
+      auto* handleLbl = swui::makeLabel(info.handle, 14, swui::textSecondary(), true);
+      handleLbl->setMarginTop(3);
+      textCol->addView(handleLbl);
+    }
+
+    std::string badgeTxt = engine.isSyncingLibrary()
+                               ? tr("library.syncing")
+                               : ("✓ " + tr("settings.account_linked_badge"));
+    auto* badgeLbl = swui::makeLabel(badgeTxt, 14, nvgRGB(46, 213, 115), true);
+    badgeLbl->setMarginTop(5);
+    textCol->addView(badgeLbl);
+
+    profileRow->addView(textCol);
+    card->addView(profileRow);
+
+    auto* actionsRow = new brls::Box();
+    actionsRow->setAxis(brls::Axis::ROW);
+    actionsRow->setAlignItems(brls::AlignItems::CENTER);
+
+    auto* syncNowBtn = swui::makeActionButton(
+        tr("settings.account_sync_btn"),
+        [](brls::View*) {
+          switube::YtEngine::getInstance().syncAccountLibrary();
+          brls::Application::notify(tr("library.syncing"));
+          return true;
+        },
+        true);
+    syncNowBtn->setWidth(220);
+    syncNowBtn->setMarginRight(14);
+    actionsRow->addView(syncNowBtn);
+
+    auto* logoutBtn = swui::makeActionButton(
+        tr("settings.account_logout_btn"),
+        [this](brls::View*) {
+          auto& eng = switube::YtEngine::getInstance();
+          eng.getClient().logout();
+          eng.clearAccountLibrary();
+          brls::Application::notify(tr("settings.account_notify_logout"));
+          refreshAccountSection();
+          return true;
+        },
+        false);
+    logoutBtn->setWidth(180);
+    actionsRow->addView(logoutBtn);
+
+    primaryAccountFocus = syncNowBtn;
+    card->addView(actionsRow);
+  } else {
+    auto* guestTitle = swui::makeLabel(tr("settings.account_guest_title"), 20, swui::textPrimary(), true);
+    card->addView(guestTitle);
+
+    auto* guestDesc = swui::makeLabel(tr("settings.account_guest_desc"), 15, swui::textSecondary());
+    guestDesc->setMarginTop(6);
+    guestDesc->setMarginBottom(16);
+    card->addView(guestDesc);
+
+    auto* linkBtn = swui::makeActionButton(
+        tr("settings.account_link_btn"),
+        [this](brls::View*) {
+          startQrLinking();
+          return true;
+        },
+        true);
+    linkBtn->setWidth(260);
+    card->addView(linkBtn);
+    primaryAccountFocus = linkBtn;
+  }
+
+  accountContainer->addView(card);
+
+  if (hadAccountFocus && primaryAccountFocus) {
+    brls::Application::giveFocus(primaryAccountFocus);
+  }
 }
 
 brls::View* SettingsTab::getDefaultFocus() {
+  if (primaryAccountFocus) return primaryAccountFocus;
   auto currentLang = switube::I18n::getInstance().getLanguage();
   if (currentLang == switube::Language::Spanish && chipEs) return chipEs;
   if (currentLang == switube::Language::English && chipEn) return chipEn;
@@ -1275,6 +1921,11 @@ brls::View* SettingsTab::getDefaultFocus() {
 void SettingsTab::updateLabels() {
   if (titleLabel) titleLabel->setText(tr("settings.title"));
   if (subtitleLabel) subtitleLabel->setText(tr("settings.subtitle"));
+
+  if (accountHeader) {
+    accountHeader->setTitle(tr("settings.account_header"));
+    accountHeader->setSubtitle(tr("settings.account_desc"));
+  }
 
   if (langHeader) {
     langHeader->setTitle(tr("settings.language_header"));

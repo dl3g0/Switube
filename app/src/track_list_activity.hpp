@@ -7,6 +7,7 @@
 
 #include "yt_music_client.hpp"
 #include "yt_engine.hpp"
+#include "ui_helpers.hpp"
 
 class TrackListActivity : public brls::Activity {
  public:
@@ -17,10 +18,14 @@ class TrackListActivity : public brls::Activity {
   void onContentAvailable() override;
 
  private:
-  void showTracks(const std::vector<switube::YtTrack>& tracks);
+  void showTracks(const std::vector<switube::YtTrack>& tracks, bool append = false);
+  void loadMore();
 
   switube::YtTrack collection;
   std::vector<switube::YtTrack> currentTracks;
+  std::string continuationToken;
+  bool isLoadingMore = false;
+  swui::ScrollSentinel* scrollSentinel = nullptr;
   std::shared_ptr<std::atomic_bool> alive;
 
   BRLS_BIND(brls::Image, artwork, "artwork");

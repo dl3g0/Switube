@@ -201,6 +201,27 @@ class HorizontalSection : public brls::Box {
   brls::Box* row = nullptr;
 };
 
+class ScrollSentinel : public brls::View {
+ public:
+  explicit ScrollSentinel(std::function<void()> onVisible)
+      : onVisible_(std::move(onVisible)) {
+    setHeight(16.0f);
+    setFocusable(false);
+  }
+  void draw(NVGcontext*, float, float, float, float, brls::Style,
+            brls::FrameContext*) override {
+    if (!triggered_ && onVisible_) {
+      triggered_ = true;
+      onVisible_();
+    }
+  }
+  void reset() { triggered_ = false; }
+
+ private:
+  std::function<void()> onVisible_;
+  bool triggered_ = false;
+};
+
 brls::Box* makeStatePanel(const std::string& title,
                           const std::string& detail,
                           NVGcolor tint = surfaceRaised(),

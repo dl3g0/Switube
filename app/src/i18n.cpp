@@ -69,9 +69,15 @@ const std::unordered_map<std::string, std::pair<const char*, const char*>> kTran
 
     // Library Tab
     {"library.title", {"Tu Biblioteca", "Your Library"}},
-    {"library.subtitle", {"Canciones guardadas como favoritas", "Songs saved as favorites"}},
+    {"library.subtitle", {"Canciones con Me gusta, favoritos y tus listas", "Liked songs, favorites, and your playlists"}},
     {"library.empty_title", {"No tienes favoritos aún", "No favorites yet"}},
-    {"library.empty_desc", {"Añade canciones tocando el botón de corazón (♡) en 'En reproducción'.", "Add songs by tapping the heart button (♡) in 'Now Playing'."}},
+    {"library.empty_desc", {"Añade canciones tocando el botón de corazón (♡) o vincula tu cuenta de YouTube en Ajustes.", "Add songs by tapping the heart button (♡) or link your YouTube account in Settings."}},
+    {"library.tab_favorites", {"Me gusta / Favoritos", "Liked / Favorites"}},
+    {"library.tab_playlists", {"Mis Listas y Álbumes", "My Playlists & Albums"}},
+    {"library.sync", {"Sincronizar", "Sync"}},
+    {"library.syncing", {"Sincronizando con tu cuenta de YouTube Music...", "Syncing with your YouTube Music account..."}},
+    {"library.playlists_empty_title", {"Sin listas sincronizadas", "No synced playlists"}},
+    {"library.playlists_empty_desc", {"Vincula tu cuenta de YouTube en Ajustes para ver tus listas de reproducción y álbumes guardados.", "Link your YouTube account in Settings to see your saved playlists and albums."}},
 
     // Now Playing Tab
     {"now_playing.title", {"En reproducción", "Now Playing"}},
@@ -110,7 +116,21 @@ const std::unordered_map<std::string, std::pair<const char*, const char*>> kTran
 
     // Settings Tab
     {"settings.title", {"Ajustes", "Settings"}},
-    {"settings.subtitle", {"Configuración y diagnóstico del reproductor", "Player configuration and diagnostics"}},
+    {"settings.subtitle", {"Cuenta de YouTube, idioma e información", "YouTube account, language, and about"}},
+    {"settings.account_header", {"Cuenta de YouTube Music", "YouTube Music Account"}},
+    {"settings.account_desc", {"Sincroniza tus Me gusta, listas de reproducción, álbumes y recomendaciones", "Sync your Likes, playlists, albums, and personalized recommendations"}},
+    {"settings.account_guest_title", {"No has iniciado sesión", "Not signed in"}},
+    {"settings.account_guest_desc", {"Vincula tu cuenta escaneando un código QR desde tu celular (estilo Google TV) para sincronizar automáticamente tus listas, Me gusta e Inicio.", "Link your account by scanning a QR code with your phone (Google TV style) to automatically sync your playlists, Likes, and Home feed."}},
+    {"settings.account_link_btn", {"Vincular con Código QR", "Link with QR Code"}},
+    {"settings.account_cancel_btn", {"Cancelar", "Cancel"}},
+    {"settings.account_logout_btn", {"Cerrar sesión", "Sign out"}},
+    {"settings.account_sync_btn", {"Sincronizar ahora", "Sync now"}},
+    {"settings.account_qr_step1", {"1. Escanea el QR con tu celular o abre en tu navegador:", "1. Scan the QR with your phone or open in browser:"}},
+    {"settings.account_qr_step2", {"2. Verifica el código y pulsa Permitir en tu cuenta:", "2. Verify the code and tap Allow on your account:"}},
+    {"settings.account_qr_waiting", {"Esperando confirmación en tu teléfono...", "Waiting for confirmation on your phone..."}},
+    {"settings.account_linked_badge", {"Sincronizado con YouTube Music", "Synced with YouTube Music"}},
+    {"settings.account_notify_linked", {"¡Cuenta de YouTube Music vinculada!", "YouTube Music account linked!"}},
+    {"settings.account_notify_logout", {"Sesión de YouTube cerrada", "Signed out of YouTube"}},
     {"settings.language_header", {"Idioma / Language", "Language / Idioma"}},
     {"settings.language_desc", {"Selecciona el idioma preferido para la interfaz y recomendaciones", "Select preferred language for interface and recommendations"}},
     {"settings.lang_es", {"Español", "Spanish"}},

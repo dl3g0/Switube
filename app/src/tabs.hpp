@@ -20,8 +20,14 @@ class HomeTab : public brls::Box {
 
  private:
   void load();
-  void renderHome(const std::vector<switube::YtShelf>& shelves);
+  void loadMore();
+  void renderHome(const std::vector<switube::YtShelf>& shelves, bool append = false);
   void updateLabels();
+
+  std::string continuationToken;
+  bool isLoadingMore = false;
+  std::vector<switube::YtShelf> currentShelves;
+  swui::ScrollSentinel* scrollSentinel = nullptr;
 
   brls::Label* titleLabel = nullptr;
   brls::Label* subtitleLabel = nullptr;
@@ -30,6 +36,8 @@ class HomeTab : public brls::Box {
   brls::Label* refreshBtnLabel = nullptr;
   brls::Box* content = nullptr;
   size_t i18nObserverId = 0;
+  size_t engineObserverId = 0;
+  bool lastSignedInState = false;
   std::shared_ptr<std::atomic_bool> alive;
 };
 
@@ -52,7 +60,9 @@ class SearchTab : public brls::Box {
   std::string currentQuery;
   switube::YtSearchFilter currentFilter = switube::YtSearchFilter::All;
   std::string continuationToken;
+  bool isLoadingMore = false;
   std::vector<switube::YtTrack> currentResults;
+  swui::ScrollSentinel* scrollSentinel = nullptr;
 
   brls::Label* titleLabel = nullptr;
   brls::Label* subtitleLabel = nullptr;
@@ -84,10 +94,18 @@ class LibraryTab : public brls::Box {
   void refresh();
   void updateLabels();
 
+  bool showPlaylists = false;
   brls::Label* titleLabel = nullptr;
   brls::Label* subtitleLabel = nullptr;
+  brls::Box* syncBtn = nullptr;
+  brls::Label* syncBtnLabel = nullptr;
+  swui::FilterChip* chipFavorites = nullptr;
+  swui::FilterChip* chipPlaylists = nullptr;
   brls::Box* content = nullptr;
+  swui::ScrollSentinel* scrollSentinel = nullptr;
   std::vector<std::string> renderedFavoriteIds;
+  std::vector<std::string> renderedPlaylistIds;
+  bool lastRenderedMode = false;
   size_t observerId = 0;
   size_t i18nObserverId = 0;
   size_t downloadObsId = 0;
@@ -142,6 +160,8 @@ class NowPlayingTab : public brls::Box {
   swui::PlayPauseIcon* playPauseIcon = nullptr;
   brls::Box* prevBtn = nullptr;
   brls::Box* nextBtn = nullptr;
+  brls::Box* favBtn = nullptr;
+  brls::Label* favBtnLabel = nullptr;
   brls::Box* downloadBtn = nullptr;
   swui::DownloadBadge* downloadBadge = nullptr;
   brls::Label* deviceLabel = nullptr;
@@ -164,15 +184,30 @@ class SettingsTab : public brls::Box {
 
  private:
   void updateLabels();
+  void refreshAccountSection();
+  void startQrLinking();
+  void cancelQrLinking();
 
   brls::Label* titleLabel = nullptr;
   brls::Label* subtitleLabel = nullptr;
   brls::Box* content = nullptr;
+  brls::Header* accountHeader = nullptr;
+  brls::Box* accountContainer = nullptr;
+  brls::View* primaryAccountFocus = nullptr;
   brls::Header* langHeader = nullptr;
   swui::FilterChip* chipEs = nullptr;
   swui::FilterChip* chipEn = nullptr;
   brls::Label* infoTitleLabel = nullptr;
   brls::Label* infoDescLabel = nullptr;
+
+  bool waitingForQr = false;
+  bool lastAccountSignedIn = false;
+  bool lastAccountSyncing = false;
+  std::string lastAccountName;
+  switube::YtDeviceCode activeDeviceCode;
+  std::shared_ptr<std::atomic_bool> qrPollingActive;
+
   size_t i18nObserverId = 0;
+  size_t engineObserverId = 0;
   std::shared_ptr<std::atomic_bool> alive;
 };
