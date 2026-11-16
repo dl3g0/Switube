@@ -267,17 +267,21 @@ void YtEngine::playQueue(const std::vector<YtTrack>& tracks, size_t startIndex) 
 
 void YtEngine::playPause() {
   bool playing = false;
+  bool changed = false;
   {
     std::lock_guard<std::recursive_mutex> lock(dataMutex_);
     if (state_ == PlaybackState::Playing) {
       state_ = PlaybackState::Paused;
       playing = false;
+      changed = true;
     } else if (state_ == PlaybackState::Paused) {
       state_ = PlaybackState::Playing;
       positionMeasuredAt_ = std::chrono::steady_clock::now();
       playing = true;
+      changed = true;
     }
   }
+  if (!changed) return;
   if (playing) {
     YtAudioPlayer::getInstance().resume();
   } else {

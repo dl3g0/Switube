@@ -187,12 +187,21 @@ void NXAudioSink::submitCurrentBuffer() {
 
   // If the next buffer is still queued in audout, block until a buffer is
   // released. This is the backpressure that paces the whole player.
+  // Use a bounded timeout so audoutWaitPlayFinish can never hang forever.
+  int waitRetries = 0;
   while (bufferQueued[currentBuffer]) {
     AudioOutBuffer* released = nullptr;
     u32 releasedCount = 0;
-    Result rc = audoutWaitPlayFinish(&released, &releasedCount, UINT64_MAX);
-    if (R_FAILED(rc))
-      break;
+    Result rc = audoutWaitPlayFinish(&released, &releasedCount, 200000000ULL);
+    if (R_FAILED(rc)) {
+      // 0x8001 (timeout) -> retry a few times before giving up on this buffer
+      if (++waitRetries >= 10) {
+        bufferQueued[currentBuffer] = false;
+        break;
+      }
+      continue;
+    }
+    waitRetries = 0;
     for (u32 n = 0; n < releasedCount && released != nullptr; n++) {
       for (int i = 0; i < BUFFER_COUNT; i++) {
         if (released == &audioBuffers[i]) {

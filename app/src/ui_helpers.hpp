@@ -228,4 +228,9 @@ brls::Box* makeStatePanel(const std::string& title,
                           brls::Label** titleOut = nullptr,
                           brls::Label** detailOut = nullptr);
 
+// Limpia vistas de forma segura liberando el foco antes de destruirlas, evitando punteros colgantes en Borealis
+void safeClearViews(brls::Box* container, brls::View* fallbackFocus = nullptr);
+void safeRemoveView(brls::Box* container, brls::View* child, brls::View* fallbackFocus = nullptr);
+brls::View* nearestFocusableChild(brls::Box* container, size_t preferredIdx = 0);
+
 } // namespace swui

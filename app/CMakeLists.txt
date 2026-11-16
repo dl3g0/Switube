@@ -52,6 +52,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../vendor/bell/external/nlohmann_json/include
 )
 
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    APP_VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_ALTER}"
+)
 target_compile_options(${PROJECT_NAME} PRIVATE -ffunction-sections -fdata-sections)
 target_link_libraries(${PROJECT_NAME} PRIVATE borealis)
 
@@ -70,6 +73,7 @@ if (PLATFORM_SWITCH)
         mbedx509
         mbedcrypto
         dav1d
+        minizip
         z
         m
     )

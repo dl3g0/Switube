@@ -106,6 +106,7 @@ class LibraryTab : public brls::Box {
   std::vector<std::string> renderedFavoriteIds;
   std::vector<std::string> renderedPlaylistIds;
   bool lastRenderedMode = false;
+  bool lastRenderedHasMore = false;
   size_t observerId = 0;
   size_t i18nObserverId = 0;
   size_t downloadObsId = 0;
@@ -167,6 +168,7 @@ class NowPlayingTab : public brls::Box {
   brls::Label* deviceLabel = nullptr;
 
   std::string loadedArtworkUrl;
+  std::string lastDownloadHint;
   size_t observerId = 0;
   size_t i18nObserverId = 0;
   size_t downloadObsId = 0;
@@ -197,6 +199,11 @@ class SettingsTab : public brls::Box {
   brls::Header* langHeader = nullptr;
   swui::FilterChip* chipEs = nullptr;
   swui::FilterChip* chipEn = nullptr;
+  brls::Header* updateHeader = nullptr;
+  brls::Label* versionLabel = nullptr;
+  brls::Box* checkUpdatesBtn = nullptr;
+  brls::Box* viewChangelogBtn = nullptr;
+  bool checkingUpdates = false;
   brls::Label* infoTitleLabel = nullptr;
   brls::Label* infoDescLabel = nullptr;
 

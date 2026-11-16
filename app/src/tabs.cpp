@@ -10,6 +10,7 @@
 #include "track_list_activity.hpp"
 #include "artist_activity.hpp"
 #include "i18n.hpp"
+#include "update.hpp"
 
 using switube::launchWorkerWithStack;
 using switube::tr;
@@ -175,7 +176,7 @@ void HomeTab::loadMore() {
 
 void HomeTab::renderHome(const std::vector<switube::YtShelf>& shelves, bool append) {
   if (!append) {
-    content->clearViews();
+    swui::safeClearViews(content, refreshBtn);
     scrollSentinel = nullptr;
     currentShelves.clear();
 
@@ -188,7 +189,7 @@ void HomeTab::renderHome(const std::vector<switube::YtShelf>& shelves, bool appe
     }
   } else {
     if (scrollSentinel) {
-      content->removeView(scrollSentinel);
+      swui::safeRemoveView(content, scrollSentinel, refreshBtn);
       scrollSentinel = nullptr;
     }
   }
@@ -390,7 +391,7 @@ void SearchTab::search(const std::string& query) {
   continuationToken.clear();
   isLoadingMore = false;
   currentResults.clear();
-  content->clearViews();
+  swui::safeClearViews(content, searchBtn);
   loadMoreBtn = nullptr;
   scrollSentinel = nullptr;
 
@@ -453,11 +454,11 @@ void SearchTab::loadMore() {
           renderResults(newTracks, true);
         } else {
           if (loadMoreBtn) {
-            content->removeView(loadMoreBtn);
+            swui::safeRemoveView(content, loadMoreBtn, searchBtn);
             loadMoreBtn = nullptr;
           }
           if (scrollSentinel) {
-            content->removeView(scrollSentinel);
+            swui::safeRemoveView(content, scrollSentinel, searchBtn);
             scrollSentinel = nullptr;
           }
         }
@@ -473,17 +474,17 @@ void SearchTab::loadMore() {
 
 void SearchTab::renderResults(const std::vector<switube::YtTrack>& tracks, bool append) {
   if (!append) {
-    content->clearViews();
+    swui::safeClearViews(content, searchBtn);
     currentResults.clear();
     loadMoreBtn = nullptr;
     scrollSentinel = nullptr;
   } else {
     if (loadMoreBtn) {
-      content->removeView(loadMoreBtn);
+      swui::safeRemoveView(content, loadMoreBtn, searchBtn);
       loadMoreBtn = nullptr;
     }
     if (scrollSentinel) {
-      content->removeView(scrollSentinel);
+      swui::safeRemoveView(content, scrollSentinel, searchBtn);
       scrollSentinel = nullptr;
     }
   }
@@ -697,13 +698,29 @@ brls::View* LibraryTab::getDefaultFocus() {
 void LibraryTab::refresh() {
   auto& engine = switube::YtEngine::getInstance();
 
-  if (scrollSentinel) {
-    content->removeView(scrollSentinel);
-    scrollSentinel = nullptr;
-  }
-
   if (showPlaylists) {
     auto playlists = engine.getUserPlaylists();
+    bool hasMore = engine.hasMorePlaylists();
+
+    // Evitar reconstruir toda la vista en notificaciones de reproducción si la lista no cambió
+    if (lastRenderedMode == showPlaylists &&
+        lastRenderedHasMore == hasMore &&
+        playlists.size() == renderedPlaylistIds.size() &&
+        !playlists.empty()) {
+      bool same = true;
+      for (size_t i = 0; i < playlists.size(); ++i) {
+        if (playlists[i].id != renderedPlaylistIds[i]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return;
+    }
+
+    if (scrollSentinel) {
+      swui::safeRemoveView(content, scrollSentinel, chipPlaylists);
+      scrollSentinel = nullptr;
+    }
 
     // Verificar si es una extensión por paginación (append sin limpiar vistas)
     bool isAppend = (lastRenderedMode == showPlaylists &&
@@ -725,7 +742,7 @@ void LibraryTab::refresh() {
     if (isAppend) {
       startIdx = renderedPlaylistIds.size();
     } else {
-      hadFocus = this->isFocused() || this->isChildFocused();
+      hadFocus = content && (content->isFocused() || content->isChildFocused());
       if (hadFocus && content) {
         const auto& children = content->getChildren();
         for (size_t i = 0; i < children.size(); ++i) {
@@ -736,10 +753,11 @@ void LibraryTab::refresh() {
         }
         brls::Application::giveFocus(nullptr);
       }
-      content->clearViews();
+      if (content) content->clearViews();
     }
 
     lastRenderedMode = showPlaylists;
+    lastRenderedHasMore = hasMore;
     renderedPlaylistIds.clear();
     renderedPlaylistIds.reserve(playlists.size());
     for (const auto& p : playlists) {
@@ -777,19 +795,40 @@ void LibraryTab::refresh() {
       content->addView(row);
     }
 
-    if (engine.hasMorePlaylists()) {
+    if (hasMore) {
       scrollSentinel = new swui::ScrollSentinel([]() {
         switube::YtEngine::getInstance().loadMorePlaylists();
       });
       content->addView(scrollSentinel);
     }
 
-    if (!isAppend && hadFocus && !content->getChildren().empty()) {
-      size_t targetIdx = std::min(focusedChildIdx, content->getChildren().size() - 1);
-      brls::Application::giveFocus(content->getChildren()[targetIdx]);
+    if (!isAppend && hadFocus) {
+      if (auto* target = swui::nearestFocusableChild(content, focusedChildIdx)) {
+        brls::Application::giveFocus(target);
+      }
     }
   } else {
     auto favorites = engine.getFavorites();
+    bool hasMore = engine.hasMoreFavorites();
+
+    if (lastRenderedMode == showPlaylists &&
+        lastRenderedHasMore == hasMore &&
+        favorites.size() == renderedFavoriteIds.size() &&
+        !favorites.empty()) {
+      bool same = true;
+      for (size_t i = 0; i < favorites.size(); ++i) {
+        if (favorites[i].id != renderedFavoriteIds[i]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return;
+    }
+
+    if (scrollSentinel) {
+      swui::safeRemoveView(content, scrollSentinel, chipFavorites);
+      scrollSentinel = nullptr;
+    }
 
     // Verificar si es una extensión por paginación (append sin limpiar vistas)
     bool isAppend = (lastRenderedMode == showPlaylists &&
@@ -811,7 +850,7 @@ void LibraryTab::refresh() {
     if (isAppend) {
       startIdx = renderedFavoriteIds.size();
     } else {
-      hadFocus = this->isFocused() || this->isChildFocused();
+      hadFocus = content && (content->isFocused() || content->isChildFocused());
       if (hadFocus && content) {
         const auto& children = content->getChildren();
         for (size_t i = 0; i < children.size(); ++i) {
@@ -822,10 +861,11 @@ void LibraryTab::refresh() {
         }
         brls::Application::giveFocus(nullptr);
       }
-      content->clearViews();
+      if (content) content->clearViews();
     }
 
     lastRenderedMode = showPlaylists;
+    lastRenderedHasMore = hasMore;
     renderedFavoriteIds.clear();
     renderedFavoriteIds.reserve(favorites.size());
     for (const auto& f : favorites) {
@@ -862,16 +902,17 @@ void LibraryTab::refresh() {
       content->addView(row);
     }
 
-    if (engine.hasMoreFavorites()) {
+    if (hasMore) {
       scrollSentinel = new swui::ScrollSentinel([]() {
         switube::YtEngine::getInstance().loadMoreFavorites();
       });
       content->addView(scrollSentinel);
     }
 
-    if (!isAppend && hadFocus && !content->getChildren().empty()) {
-      size_t targetIdx = std::min(focusedChildIdx, content->getChildren().size() - 1);
-      brls::Application::giveFocus(content->getChildren()[targetIdx]);
+    if (!isAppend && hadFocus) {
+      if (auto* target = swui::nearestFocusableChild(content, focusedChildIdx)) {
+        brls::Application::giveFocus(target);
+      }
     }
   }
 }
@@ -941,7 +982,7 @@ brls::View* DownloadsTab::getDefaultFocus() {
 }
 
 void DownloadsTab::refresh() {
-  bool hadFocus = this->isFocused() || this->isChildFocused();
+  bool hadFocus = content && (content->isFocused() || content->isChildFocused());
   size_t focusedChildIdx = 0;
   if (hadFocus && content) {
     const auto& children = content->getChildren();
@@ -954,7 +995,7 @@ void DownloadsTab::refresh() {
     brls::Application::giveFocus(nullptr);
   }
 
-  content->clearViews();
+  if (content) content->clearViews();
   auto tracks = switube::DownloadManager::getInstance().getDownloadedAsTracks();
 
   if (tracks.empty()) {
@@ -994,9 +1035,10 @@ void DownloadsTab::refresh() {
     content->addView(row);
   }
 
-  if (hadFocus && !content->getChildren().empty()) {
-    size_t targetIdx = std::min(focusedChildIdx, content->getChildren().size() - 1);
-    brls::Application::giveFocus(content->getChildren()[targetIdx]);
+  if (hadFocus) {
+    if (auto* target = swui::nearestFocusableChild(content, focusedChildIdx)) {
+      brls::Application::giveFocus(target);
+    }
   }
 }
 
@@ -1021,7 +1063,7 @@ class MusicProgressBar : public brls::View {
             eng.seekTo(0);
           return true;
         },
-        false, true);
+        true, true);
 
     registerAction(
         tr("now_playing.seek_fwd"), brls::BUTTON_RIGHT,
@@ -1032,7 +1074,7 @@ class MusicProgressBar : public brls::View {
             eng.seekTo(now.positionMs + 10000);
           return true;
         },
-        false, true);
+        true, true);
 
     registerAction(
         "Play/Pause", brls::BUTTON_A,
@@ -1272,7 +1314,7 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
   body->addView(rightCol);
   addView(body);
 
-  // Acciones rápidas de gatillos para saltar canciones / buscar
+  // Acciones rápidas de gatillos para buscar (ocultas del menú inferior)
   registerAction(
       "Seek -10s", brls::BUTTON_LT,
       [](brls::View*) {
@@ -1282,7 +1324,7 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
         else eng.seekTo(0);
         return true;
       },
-      false, true);
+      true, true);
 
   registerAction(
       "Seek +10s", brls::BUTTON_RT,
@@ -1292,7 +1334,7 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
         if (now.positionMs + 10000 < now.durationMs) eng.seekTo(now.positionMs + 10000);
         return true;
       },
-      false, true);
+      true, true);
 
   registerAction("Descargar", brls::BUTTON_X, [this](brls::View*) {
     handleDownloadCurrentTrack();
@@ -1503,9 +1545,12 @@ void NowPlayingTab::refresh() {
       }
 
       std::string hint = downloaded ? "Eliminar descarga" : (downloading ? "Descargando..." : "Descargar");
-      updateActionHint(brls::BUTTON_X, hint);
-      if (this->isFocused() || this->isChildFocused()) {
-        brls::Application::getGlobalHintsUpdateEvent()->fire();
+      if (hint != lastDownloadHint) {
+        lastDownloadHint = hint;
+        updateActionHint(brls::BUTTON_X, hint);
+        if (this->isFocused() || this->isChildFocused()) {
+          brls::Application::getGlobalHintsUpdateEvent()->fire();
+        }
       }
     }
   } else {
@@ -1594,7 +1639,86 @@ SettingsTab::SettingsTab() : alive(std::make_shared<std::atomic_bool>(true)) {
 
   content->addView(langRow);
 
-  // 3. Información y Créditos
+  // 3. Actualizaciones (GitHub Releases)
+  updateHeader = new brls::Header();
+  updateHeader->setTitle(tr("settings.update_header"));
+  updateHeader->setSubtitle(tr("settings.update_desc"));
+  updateHeader->setHeight(48);
+  updateHeader->setMarginBottom(10);
+  content->addView(updateHeader);
+
+  auto* updateCard = new brls::Box();
+  updateCard->setCornerRadius(22);
+  updateCard->setBackgroundColor(swui::surfaceRaised());
+  updateCard->setAxis(brls::Axis::COLUMN);
+  updateCard->setPadding(20, 24, 20, 24);
+  updateCard->setMarginBottom(24);
+
+  std::string verKey = switube::update::hasPending() ? "settings.version_pending" : "settings.version_label";
+  versionLabel = swui::makeLabel(tr(verKey, APP_VERSION), 17, swui::textPrimary(), true);
+  versionLabel->setMarginBottom(14);
+  updateCard->addView(versionLabel);
+
+  auto* updateBtnsRow = new brls::Box();
+  updateBtnsRow->setAxis(brls::Axis::ROW);
+  updateBtnsRow->setAlignItems(brls::AlignItems::CENTER);
+
+  auto tabAlive = alive;
+  checkUpdatesBtn = swui::makeActionButton(
+      tr("settings.check_updates_btn"),
+      [this, tabAlive](brls::View*) {
+        if (checkingUpdates) return true;
+        checkingUpdates = true;
+        if (!checkUpdatesBtn->getChildren().empty()) {
+          if (auto* lbl = dynamic_cast<brls::Label*>(checkUpdatesBtn->getChildren()[0])) {
+            lbl->setText(tr("settings.checking_updates"));
+          }
+        }
+        switube::update::checkAsync([this, tabAlive](switube::update::Release r) {
+          if (!tabAlive->load()) return;
+          checkingUpdates = false;
+          if (checkUpdatesBtn && !checkUpdatesBtn->getChildren().empty()) {
+            if (auto* lbl = dynamic_cast<brls::Label*>(checkUpdatesBtn->getChildren()[0])) {
+              lbl->setText(tr("settings.check_updates_btn"));
+            }
+          }
+          if (!r.ok) {
+            auto* d = new brls::Dialog(tr("update.check_failed") + r.error);
+            d->addButton(tr("update.ok"), []() {});
+            d->open();
+          } else if (!r.newer) {
+            auto* d = new brls::Dialog(tr("update.up_to_date", APP_VERSION));
+            d->addButton(tr("update.ok"), []() {});
+            d->open();
+          } else if (r.url.empty()) {
+            auto* d = new brls::Dialog(tr("update.no_nro_asset", r.version));
+            d->addButton(tr("update.ok"), []() {});
+            d->open();
+          } else {
+            switube::update::promptInstall(r);
+          }
+        });
+        return true;
+      },
+      true);
+  checkUpdatesBtn->setWidth(250);
+  checkUpdatesBtn->setMarginRight(14);
+  updateBtnsRow->addView(checkUpdatesBtn);
+
+  viewChangelogBtn = swui::makeActionButton(
+      tr("settings.view_changelog_btn"),
+      [](brls::View*) {
+        switube::update::showChangelog(APP_VERSION);
+        return true;
+      },
+      false);
+  viewChangelogBtn->setWidth(250);
+  updateBtnsRow->addView(viewChangelogBtn);
+
+  updateCard->addView(updateBtnsRow);
+  content->addView(updateCard);
+
+  // 4. Información y Créditos
   auto* infoBox = swui::makeStatePanel(
       tr("settings.about_title"),
       tr("settings.about_desc"),
@@ -1932,6 +2056,25 @@ void SettingsTab::updateLabels() {
     langHeader->setSubtitle(tr("settings.language_desc"));
   }
 
+  if (updateHeader) {
+    updateHeader->setTitle(tr("settings.update_header"));
+    updateHeader->setSubtitle(tr("settings.update_desc"));
+  }
+  if (versionLabel) {
+    std::string verKey = switube::update::hasPending() ? "settings.version_pending" : "settings.version_label";
+    versionLabel->setText(tr(verKey, APP_VERSION));
+  }
+  if (checkUpdatesBtn && !checkUpdatesBtn->getChildren().empty()) {
+    if (auto* lbl = dynamic_cast<brls::Label*>(checkUpdatesBtn->getChildren()[0])) {
+      lbl->setText(checkingUpdates ? tr("settings.checking_updates") : tr("settings.check_updates_btn"));
+    }
+  }
+  if (viewChangelogBtn && !viewChangelogBtn->getChildren().empty()) {
+    if (auto* lbl = dynamic_cast<brls::Label*>(viewChangelogBtn->getChildren()[0])) {
+      lbl->setText(tr("settings.view_changelog_btn"));
+    }
+  }
+
   auto currentLang = switube::I18n::getInstance().getLanguage();
   if (chipEs) {
     chipEs->setText(tr("settings.lang_es"));
@@ -1945,9 +2088,11 @@ void SettingsTab::updateLabels() {
   if (infoTitleLabel) infoTitleLabel->setText(tr("settings.about_title"));
   if (infoDescLabel) infoDescLabel->setText(tr("settings.about_desc"));
 
-  // Conservar el foco activamente en el chip de idioma actual para que los controles no se desconecten
-  auto* activeChip = (currentLang == switube::Language::Spanish) ? chipEs : chipEn;
-  if (activeChip) {
-    brls::Application::giveFocus(activeChip);
+  // Conservar el foco activamente en el chip de idioma actual solo si Ajustes tiene el foco
+  if (this->isFocused() || this->isChildFocused()) {
+    auto* activeChip = (currentLang == switube::Language::Spanish) ? chipEs : chipEn;
+    if (activeChip) {
+      brls::Application::giveFocus(activeChip);
+    }
   }
 }

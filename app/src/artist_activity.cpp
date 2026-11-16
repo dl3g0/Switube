@@ -110,7 +110,7 @@ void ArtistActivity::onContentAvailable() {
         renderArtist(page);
       } else {
         if (content) {
-          content->clearViews();
+          swui::safeClearViews(content, nullptr);
           content->addView(swui::makeStatePanel(
               tr("artist.error_title"),
               tr("artist.error_desc")));
@@ -123,7 +123,7 @@ void ArtistActivity::onContentAvailable() {
 void ArtistActivity::renderArtist(const switube::YtArtistPage& page) {
   artistPage = page;
   if (!content) return;
-  content->clearViews();
+  swui::safeClearViews(content, nullptr);
 
   if (!page.name.empty() && nameLabel) {
     nameLabel->setText(page.name);

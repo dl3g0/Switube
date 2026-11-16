@@ -186,11 +186,9 @@ void YtAudioPlayer::play(const std::string& streamUrl, uint32_t durationMs, uint
     gen = ++currentGeneration_;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(sinkMutex_);
-    if (sink_) {
-      sink_->flush();
-    }
+  // flush() only sets an atomic flag; avoid blocking the UI thread on sinkMutex_
+  if (sink_) {
+    sink_->flush();
   }
 
   nxlog::pushf("YtAudioPlayer: starting playback (gen %llu, bytes: %llu)...",
@@ -226,11 +224,9 @@ void YtAudioPlayer::stop() {
     isPaused_ = false;
     currentPositionMs_ = 0;
   }
-  {
-    std::lock_guard<std::mutex> lock(sinkMutex_);
-    if (sink_) {
-      sink_->flush();
-    }
+  // flush() only sets an atomic flag; avoid blocking the UI thread on sinkMutex_
+  if (sink_) {
+    sink_->flush();
   }
 }
 
@@ -241,7 +237,7 @@ void YtAudioPlayer::seekTo(uint32_t positionMs) {
 
 void YtAudioPlayer::setVolume(float volume) {
   volume_ = volume;
-  std::lock_guard<std::mutex> lock(sinkMutex_);
+  // setVolume() stores to an atomic float; avoid blocking the UI thread on sinkMutex_
   if (sink_) {
     sink_->setVolume(volume);
   }
@@ -593,7 +589,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
   bool completed = false;
   bool firstFrameNotified = false;
 
-  while (!stopToken->load()) {
+  while (!stopToken->load() && generation == currentGeneration_.load()) {
     int64_t seekMs = seekTargetMs_.exchange(-1);
     if (seekMs >= 0) {
       int64_t targetPts = static_cast<int64_t>((static_cast<double>(seekMs) / 1000.0) / av_q2d(tb));
@@ -684,7 +680,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
                completed ? "YES" : "NO", stopToken->load() ? "YES" : "NO");
 
   bool isActualEnd = (durMs == 0 || currentPositionMs_.load() >= static_cast<uint32_t>(durMs * 0.80f));
-  if (completed && isActualEnd && !stopToken->load()) {
+  if (completed && isActualEnd && !stopToken->load() && generation == currentGeneration_.load()) {
     std::function<void()> cb;
     {
       std::lock_guard<std::mutex> lock(controlMutex_);

@@ -813,34 +813,45 @@ void NextTrackIcon::draw(NVGcontext* vg, float x, float y, float width, float he
   nvgRestore(vg);
 }
 
+namespace {
+brls::Box* makeIconActionButton(brls::View* icon,
+                                std::function<bool(brls::View*)> action,
+                                bool primary) {
+  auto* button = new brls::Box();
+  button->setFocusable(true);
+  button->setAxis(brls::Axis::ROW);
+  button->setAlignItems(brls::AlignItems::CENTER);
+  button->setJustifyContent(brls::JustifyContent::CENTER);
+  button->setPadding(10, 18, 10, 18);
+  button->setCornerRadius(9);
+  button->setHighlightCornerRadius(9);
+  button->setBackgroundColor(primary ? accent() : surfaceRaised());
+  button->addGestureRecognizer(new brls::TapGestureRecognizer(button));
+  button->registerClickAction(std::move(action));
+  button->addView(icon);
+  return button;
+}
+}  // namespace
+
 brls::Box* makePlayPauseButton(std::function<bool(brls::View*)> action,
                                PlayPauseIcon** iconOut, bool primary) {
-  auto* button = makeActionButton("", std::move(action), primary);
-  button->clearViews();
   auto* icon = new PlayPauseIcon(primary ? 26.0f : 20.0f);
-  button->addView(icon);
   if (iconOut) *iconOut = icon;
-  return button;
+  return makeIconActionButton(icon, std::move(action), primary);
 }
 
 brls::Box* makePrevButton(std::function<bool(brls::View*)> action,
                           PrevTrackIcon** iconOut) {
-  auto* button = makeActionButton("", std::move(action), false);
-  button->clearViews();
   auto* icon = new PrevTrackIcon(20.0f);
-  button->addView(icon);
   if (iconOut) *iconOut = icon;
-  return button;
+  return makeIconActionButton(icon, std::move(action), false);
 }
 
 brls::Box* makeNextButton(std::function<bool(brls::View*)> action,
                           NextTrackIcon** iconOut) {
-  auto* button = makeActionButton("", std::move(action), false);
-  button->clearViews();
   auto* icon = new NextTrackIcon(20.0f);
-  button->addView(icon);
   if (iconOut) *iconOut = icon;
-  return button;
+  return makeIconActionButton(icon, std::move(action), false);
 }
 
 brls::Box* makeStatePanel(const std::string& title,
@@ -1183,6 +1194,37 @@ void HorizontalSection::showEmpty(const std::string& text) {
   panel->setWidth(430);
   panel->setMarginRight(14);
   row->addView(panel);
+}
+
+void safeClearViews(brls::Box* container, brls::View* fallbackFocus) {
+  if (!container) return;
+  if (container->isFocused() || container->isChildFocused()) {
+    brls::Application::giveFocus(fallbackFocus);
+  }
+  container->clearViews();
+}
+
+void safeRemoveView(brls::Box* container, brls::View* child, brls::View* fallbackFocus) {
+  if (!container || !child) return;
+  auto* box = dynamic_cast<brls::Box*>(child);
+  if (child->isFocused() || (box && box->isChildFocused())) {
+    brls::Application::giveFocus(fallbackFocus);
+  }
+  container->removeView(child);
+}
+
+brls::View* nearestFocusableChild(brls::Box* container, size_t preferredIdx) {
+  if (!container) return nullptr;
+  const auto& children = container->getChildren();
+  if (children.empty()) return nullptr;
+  size_t idx = std::min(preferredIdx, children.size() - 1);
+  for (size_t i = idx; i < children.size(); ++i) {
+    if (children[i] && children[i]->isFocusable()) return children[i];
+  }
+  for (size_t i = idx; i > 0; --i) {
+    if (children[i - 1] && children[i - 1]->isFocusable()) return children[i - 1];
+  }
+  return nullptr;
 }
 
 }  // namespace swui

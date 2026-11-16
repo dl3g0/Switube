@@ -18,6 +18,7 @@
 #include "playback_shortcuts.hpp"
 #include "ui_helpers.hpp"
 #include "i18n.hpp"
+#include "update.hpp"
 
 class MainActivity : public brls::Activity {
  public:
@@ -75,6 +76,7 @@ int main(int argc, char* argv[]) {
 #endif
 
   curl_global_init(CURL_GLOBAL_ALL);
+  switube::update::init(argc, argv);
 
   // Cargar configuración de idioma antes de iniciar Borealis
   switube::I18n::getInstance().init();
@@ -121,6 +123,13 @@ int main(int argc, char* argv[]) {
   auto* activity = new MainActivity();
   brls::Application::pushActivity(activity);
 
+  // Comprobación silenciosa de actualizaciones al iniciar
+  switube::update::checkAsync([](switube::update::Release r) {
+    if (r.ok && r.installable()) {
+      switube::update::promptInstall(r);
+    }
+  });
+
   nxlog::push("Entering mainLoop...");
   while (brls::Application::mainLoop()) {
     nxlog::drain();
@@ -130,6 +139,7 @@ int main(int argc, char* argv[]) {
   switube::YtEngine::getInstance().shutdown();
   swui::shutdownRemoteImages();
   swplatform::preventSleep(false);
+  switube::update::applyPending();
 
   nxlog::push("Switube terminated cleanly.");
   return EXIT_SUCCESS;

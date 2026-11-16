@@ -92,7 +92,7 @@ void TrackListActivity::loadMore() {
 
 void TrackListActivity::showTracks(const std::vector<switube::YtTrack>& tracks, bool append) {
   if (!append) {
-    list->clearViews();
+    swui::safeClearViews(list, playAll);
     scrollSentinel = nullptr;
     currentTracks.clear();
 
@@ -106,7 +106,7 @@ void TrackListActivity::showTracks(const std::vector<switube::YtTrack>& tracks, 
     }
   } else {
     if (scrollSentinel) {
-      list->removeView(scrollSentinel);
+      swui::safeRemoveView(list, scrollSentinel, playAll);
       scrollSentinel = nullptr;
     }
   }
