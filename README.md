@@ -18,6 +18,7 @@
 </p>
 
 [Características](#-características-principales) •
+[Galería](#-galería) •
 [Controles](#-controles) •
 [Instalación](#-instalación-en-la-microsd) •
 [Arquitectura](#-arquitectura-del-proyecto) •
@@ -61,6 +62,26 @@ Switube está compuesto por dos módulos diseñados para funcionar tanto de form
   - **En Reproducción:** Tarjeta interactiva con barra de progreso, controles de transporte (**Repetir**, **Anterior**, **Play/Pausa**, **Siguiente**, **Aleatorio**) y deslizador de volumen.
   - **Descargas Offline:** Acceso instantáneo a todas las canciones descargadas desde la app principal.
   - **Buscar en YouTube Music:** Teclado integrado en el overlay para buscar y reproducir cualquier canción en línea al vuelo.
+
+---
+
+## 📸 Galería
+
+| Inicio | Reproduciendo con MiniPlayer |
+| :---: | :---: |
+| ![Inicio](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/01-home.jpg) | ![Inicio reproduciendo](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/02-home-playing.jpg) |
+
+| En Reproducción | Biblioteca Sincronizada |
+| :---: | :---: |
+| ![En reproducción](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/03-now-playing.jpg) | ![Biblioteca](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/05-library.jpg) |
+
+| Descargas Offline | Ajustes (Cuenta, Idioma y Updates) |
+| :---: | :---: |
+| ![Descargas](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/04-downloads.jpg) | ![Ajustes](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/06-settings.jpg) |
+
+| Menú Ultrahand | Overlay en Segundo Plano |
+| :---: | :---: |
+| ![Ultrahand](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/07-ultrahand.png) | ![Overlay](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/08-overlay.jpg) |
 
 ---
 

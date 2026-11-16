@@ -28,6 +28,24 @@ Esta actualización **v0.2.0** introduce vinculación oficial con tu cuenta de Y
 - **Fix de errores SSL en streaming e *Inicio*:** Limitado `CURLOPT_MAXCONNECTS = 1L` por hilo de imágenes para evitar el agotamiento de sockets BSD/TLS en Switch, además de límite de reintentos consecutivos en `YtEngine`.
 - **Pulido general:** Eliminado el glifo roto `?` en botones de sincronización, corregido el subtítulo duplicado en *Inicio* y ocultadas las opciones de `Seek` del menú inferior en *En reproducción*.
 
+### 📸 Galería de v0.2.0
+
+| Inicio | Reproduciendo con MiniPlayer |
+| :---: | :---: |
+| ![Inicio](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/01-home.jpg) | ![Inicio reproduciendo](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/02-home-playing.jpg) |
+
+| En Reproducción | Biblioteca Sincronizada |
+| :---: | :---: |
+| ![En reproducción](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/03-now-playing.jpg) | ![Biblioteca](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/05-library.jpg) |
+
+| Descargas Offline | Ajustes (Cuenta, Idioma y Updates) |
+| :---: | :---: |
+| ![Descargas](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/04-downloads.jpg) | ![Ajustes](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/06-settings.jpg) |
+
+| Menú Ultrahand | Overlay en Segundo Plano |
+| :---: | :---: |
+| ![Ultrahand](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/07-ultrahand.png) | ![Overlay](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/08-overlay.jpg) |
+
 ---
 
 # 🚀 Switube v0.1.0 — Lanzamiento Inicial
