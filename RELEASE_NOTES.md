@@ -46,6 +46,10 @@ Esta actualización **v0.2.0** introduce vinculación oficial con tu cuenta de Y
 | :---: | :---: |
 | ![Ultrahand](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/07-ultrahand.png) | ![Overlay](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/08-overlay.jpg) |
 
+| Descargas en Juego (Overlay) | Reproduciendo en Juego (Overlay) |
+| :---: | :---: |
+| ![Overlay Descargas](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/09-overlay-downloads-ingame.jpg) | ![Overlay Reproduciendo](https://raw.githubusercontent.com/dl3g0/Switube/main/docs/screenshots/10-overlay-playing-ingame.jpg) |
+
 ---
 
 # 🚀 Switube v0.1.0 — Lanzamiento Inicial
