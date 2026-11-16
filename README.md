@@ -42,15 +42,16 @@ Switube está compuesto por dos módulos diseñados para funcionar tanto de form
 ## ✨ Características Principales
 
 ### 🖥️ Aplicación Principal (`Switube.nro`)
-- **Feed de Inicio Dinámico (Multi-Carrusel):** Carga automática de múltiples secciones de YouTube Music (*Selección rápida*, *Clásicos inolvidables*, *Esenciales de todos los tiempos*, *Nuevos lanzamientos*, *Canciones del momento para ti*, *Playlists de la comunidad*, *Álbumes y sencillos nuevos*, *Tendencias* y *Videos musicales nuevos*).
-- **Búsqueda con Filtros Inteligentes:** Explora el catálogo completo de YouTube Music filtrando por **Todos**, **Canciones**, **Videos**, **Álbumes**, **Artistas** y **Listas de reproducción** con paginación continua (*Cargar más*).
+- **Cuenta Oficial de YouTube Music (QR Login):** Vincula tu cuenta mediante código QR (`Google TV OAuth 2.0`) desde *Ajustes* para sincronizar tus **Me gusta**, **Playlists**, álbumes guardados y recomendaciones personalizadas en *Inicio*.
+- **Feed de Inicio Dinámico (Multi-Carrusel):** Carga automática de múltiples secciones de YouTube Music (*Selección rápida*, *Clásicos inolvidables*, *Nuevos lanzamientos*, *Tendencias*, etc.) con paginación infinita por scroll.
+- **Búsqueda con Filtros Inteligentes:** Explora el catálogo completo de YouTube Music filtrando por **Todos**, **Canciones**, **Videos**, **Álbumes**, **Artistas** y **Listas de reproducción** con carga continua automática.
 - **Vistas Dedicadas de Artistas y Colecciones:** Consulta la biografía, suscriptores, canciones populares, discografía (álbumes y sencillos) y artistas similares, o abre cualquier álbum, sencillo o lista de reproducción.
 - **Descargas Offline Nativas (`.opus`):**
   - Descarga cualquier canción o video con un solo botón para escucharla **sin conexión a Internet**.
   - Las pistas se almacenan en `/config/Switube/downloads/` junto con su índice de metadatos (`downloads.json`), listas para reproducirse al instante tanto en la app como desde el overlay.
-- **Reproductor Completo y Mini-Player Persistente:**
-  - Barra lateral e inferior con estado de reproducción en vivo, descarga rápida, control de volumen, modo aleatorio (*Shuffle*) y repetición (*Off / All / One*).
-  - Vista *En Reproducción* con carátula en alta resolución y fondos dinámicos personalizables.
+- **Interfaz Obsidiana/Carmesí y MiniPlayer Flotante:**
+  - Barra lateral translúcida redondeada, *MiniPlayer* flotante tipo cristal con barra de progreso en vivo, y vista *En Reproducción* en card flotante con carátula HD ambiental y botón de *Me gusta* (`♥`/`♡`).
+- **Auto-Actualizador Integrado:** Comprueba nuevas versiones en GitHub Releases al iniciar o desde *Ajustes*, consulta el historial de cambios y descarga/instala el paquete `Switube-Complete-SD.zip` directamente desde la consola.
 - **Multilenguaje Automático:** Detección automática del idioma del sistema de la consola (**Español** / **Inglés**) con selector en vivo desde *Ajustes*.
 
 ### 🎮 Overlay y Motor en Segundo Plano (`Switube.ovl` + `exefs.nsp`)
@@ -73,7 +74,7 @@ Switube está compuesto por dos módulos diseñados para funcionar tanto de form
 | **A** | Reproducir canción / Video • Abrir Álbum, Sencillo, Artista o Lista |
 | **X** *(sobre una canción/video)* | **Descargar canción** para modo offline / **Eliminar descarga** |
 | **B** | Volver atrás |
-| **Y** | Play / Pausa rápida desde cualquier pantalla |
+| **Y** | Play / Pausa rápida desde cualquier pantalla *(o Me gusta en En Reproducción)* |
 | **L / R** | Canción Anterior / Siguiente |
 | **ZL / ZR** | Bajar / Subir volumen |
 | **Pantalla Táctil** | Toque directo sobre tarjetas, botones, barra de progreso e íconos de descarga |

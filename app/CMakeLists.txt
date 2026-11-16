@@ -16,7 +16,7 @@ if (PLATFORM_SWITCH)
 endif ()
 
 set(VERSION_MAJOR "0")
-set(VERSION_MINOR "1")
+set(VERSION_MINOR "2")
 set(VERSION_ALTER "0")
 set(PROJECT_AUTHOR "Switube Team")
 set(PROJECT_TITLEID "010ff000ffff0120")

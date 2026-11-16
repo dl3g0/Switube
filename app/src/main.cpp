@@ -87,7 +87,7 @@ int main(int argc, char* argv[]) {
   mkdir("/config", 0755);
   mkdir("/config/Switube", 0755);
   nxlog::setLogFile("/config/Switube/app.log");
-  nxlog::push("Switube 0.1.0 starting...");
+  nxlog::push("Switube " APP_VERSION " starting...");
   brls::FontLoader::USER_EMOJI_PATH = "romfs:/fonts/OpenMoji.ttf";
 #endif
 

@@ -1,3 +1,35 @@
+# 🚀 Switube v0.2.0 — Sincronización con Cuenta, Auto-Actualizador y Rediseño UI/UX
+
+Esta actualización **v0.2.0** introduce vinculación oficial con tu cuenta de YouTube Music mediante código QR, sincronización completa de biblioteca, paginación infinita, auto-actualizador desde GitHub Releases, un rediseño visual completo en estilo obsidiana/carmesí y múltiples correcciones críticas de estabilidad.
+
+---
+
+## ✨ Novedades de la Versión 0.2.0
+
+### 🔐 Cuenta de YouTube Music y Sincronización
+- **Vinculación por Código QR (Google TV OAuth 2.0):** Escanea el código QR desde *Ajustes* (`google.com/device` / `youtube.com/activate`) para iniciar sesión sin contraseñas en la consola. La sesión se guarda en `/config/Switube/auth.json`.
+- **Sincronización de Biblioteca:** Carga automática de tus canciones con **Me gusta** (`VLLM`), listas de reproducción y álbumes guardados en *Biblioteca*, además de recomendaciones personalizadas en *Inicio*.
+- **Me gusta bidireccional:** Botón interactivo `♥` / `♡` en *En reproducción* (y atajo con **`Y`**) sincronizado en tiempo real con tu cuenta.
+
+### 🎨 Rediseño UI/UX y Portadas HD
+- **Tema Unificado Obsidiana & Carmesí:** Eliminadas las barras grises y el foco cian por defecto de Borealis; ahora la barra lateral es un card translúcido redondeado, el footer inferior es negro obsidiana (`#07070A`) y el foco usa tonos carmesí/coral.
+- **MiniPlayer Flotante y Card *En Reproducción*:**
+  - *MiniPlayer* rediseñado como cápsula flotante tipo cristal con sombra suave, borde de `1px` y barra de progreso en vivo en el borde inferior.
+  - Vista *En Reproducción* convertida en un card flotante redondeado con carátula ambiental centrada y degradado interno sin cortes bruscos.
+- **Portadas en Alta Resolución y Carga Rápida:** Escalado automático de miniaturas (`360px` en tarjetas, `240px` en filas/MiniPlayer, `544px` en *En reproducción* y `/hqdefault.jpg` para `i.ytimg.com`) con pool de 4 hilos y reutilización de conexiones `CURL*`.
+
+### 🔄 Auto-Actualizador y Paginación Infinita
+- **Actualizador Integrado (GitHub Releases):** Comprobación silenciosa al iniciar y manual desde *Ajustes* (con visor scrollable de *Changelog*), descarga automática de `Switube-Complete-SD.zip` (extrayendo `.nro`, `.ovl` y sysmodule con `minizip`) y aplicación segura al reiniciar.
+- **Scroll Infinito:** Paginación automática al desplazarse o acercarse al final en *Inicio*, *Buscar*, *Biblioteca* (Favoritos y Playlists) y listas/álbumes.
+
+### 🛠️ Correcciones de Estabilidad
+- **Fix de crash Use-After-Free al navegar con joystick:** Corregidos los botones de transporte (`makePlayPauseButton`, `makePrevButton`, `makeNextButton`) y añadida limpieza segura de foco (`safeClearViews` / `safeRemoveView`) al actualizar listas dinámicas.
+- **Fix de congelamiento al pausar tras avanzar pista:** Timeout acotado en `audoutWaitPlayFinish`, liberación de `sinkMutex_` en operaciones atómicas y transición segura en `playPause()`.
+- **Fix de errores SSL en streaming e *Inicio*:** Limitado `CURLOPT_MAXCONNECTS = 1L` por hilo de imágenes para evitar el agotamiento de sockets BSD/TLS en Switch, además de límite de reintentos consecutivos en `YtEngine`.
+- **Pulido general:** Eliminado el glifo roto `?` en botones de sincronización, corregido el subtítulo duplicado en *Inicio* y ocultadas las opciones de `Seek` del menú inferior en *En reproducción*.
+
+---
+
 # 🚀 Switube v0.1.0 — Lanzamiento Inicial
 
 **Switube** es un cliente nativo de **YouTube Music** y motor de reproducción en segundo plano para **Nintendo Switch**, diseñado para funcionar sin necesidad de cuenta Premium ni emparejamiento con dispositivos externos.

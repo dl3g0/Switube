@@ -135,7 +135,7 @@ const std::unordered_map<std::string, std::pair<const char*, const char*>> kTran
     {"settings.language_desc", {"Selecciona el idioma preferido para la interfaz y recomendaciones", "Select preferred language for interface and recommendations"}},
     {"settings.lang_es", {"Español", "Spanish"}},
     {"settings.lang_en", {"English", "English"}},
-    {"settings.about_title", {"Switube v0.1.0", "Switube v0.1.0"}},
+    {"settings.about_title", {"Switube v0.2.0", "Switube v0.2.0"}},
     {"settings.about_desc", {
         "Cliente nativo de YouTube Music para Nintendo Switch.\n"
         "Soporte nativo para carruseles, búsquedas, perfiles de artista, descargas offline y audio Opus 48 kHz.\n"
