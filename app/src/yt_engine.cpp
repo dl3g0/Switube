@@ -234,6 +234,7 @@ void YtEngine::playQueue(const std::vector<YtTrack>& tracks, size_t startIndex) 
     }
 
     if (ok) {
+      consecutiveResolveFails_.store(0);
       {
         std::lock_guard<std::recursive_mutex> lock(dataMutex_);
         if (stream.approxDurationMs > 0 && nowPlaying_.durationMs == 0) {
@@ -245,11 +246,12 @@ void YtEngine::playQueue(const std::vector<YtTrack>& tracks, size_t startIndex) 
 
       YtAudioPlayer::getInstance().play(stream.url, stream.approxDurationMs, stream.contentLength);
     } else {
-      nxlog::pushf("Playback failed to resolve stream for '%s' (track unavailable). Auto-advancing to next track...", trackId.c_str());
+      int fails = ++consecutiveResolveFails_;
+      nxlog::pushf("Playback failed to resolve stream for '%s' (fails=%d).", trackId.c_str(), fails);
       bool canAdvance = false;
       {
         std::lock_guard<std::recursive_mutex> lock(dataMutex_);
-        canAdvance = (!queue_.empty() && queue_.size() > 1);
+        canAdvance = (!queue_.empty() && queue_.size() > 1 && fails < 3);
         if (!canAdvance) {
           state_ = PlaybackState::Error;
         }

@@ -1150,7 +1150,9 @@ class MusicProgressBar : public brls::View {
 NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true)) {
   setAxis(brls::Axis::COLUMN);
   setGrow(1.0f);
-  setPadding(0, 0, 0, 0);
+  setMargins(14, 24, 6, 18);
+  setPadding(24, 32, 24, 32);
+  setCornerRadius(16);
   setJustifyContent(brls::JustifyContent::CENTER);
   setAlignItems(brls::AlignItems::CENTER);
   setBackgroundColor(nvgRGBA(0, 0, 0, 0));
@@ -1190,8 +1192,8 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
   // Columna derecha: Título, Artista, Scrubber y Controles (centrado y ancho balanceado)
   auto* rightCol = new brls::Box();
   rightCol->setAxis(brls::Axis::COLUMN);
-  rightCol->setWidth(480);
-  rightCol->setMarginLeft(54);
+  rightCol->setWidth(450);
+  rightCol->setMarginLeft(44);
   rightCol->setJustifyContent(brls::JustifyContent::CENTER);
 
   contextLabel = swui::makeLabel(tr("now_playing.context_from"), 14, nvgRGB(160, 165, 175), true);
@@ -1439,49 +1441,70 @@ void NowPlayingTab::draw(NVGcontext* vg, float x, float y, float width, float he
     }
   }
 
+  const float r = 16.0f;
+  nvgSave(vg);
+
+  // Sombra suave flotante del card
+  NVGpaint shadow = nvgBoxGradient(vg, x, y + 3.0f, width, height, r, 14.0f,
+                                   nvgRGBA(0, 0, 0, 125), nvgRGBA(0, 0, 0, 0));
+  nvgBeginPath(vg);
+  nvgRect(vg, x - 12.0f, y - 8.0f, width + 24.0f, height + 24.0f);
+  nvgRoundedRect(vg, x, y, width, height, r);
+  nvgPathWinding(vg, NVG_HOLE);
+  nvgFillPaint(vg, shadow);
+  nvgFill(vg);
+
+  // Fondo base del card
+  nvgBeginPath(vg);
+  nvgRoundedRect(vg, x, y, width, height, r);
+  NVGpaint baseGrad = nvgRadialGradient(vg, x + width * 0.65f, y + height * 0.30f,
+                                        height * 0.15f, width * 0.85f,
+                                        nvgRGBA(52, 12, 20, 225), nvgRGBA(14, 13, 19, 238));
+  nvgFillPaint(vg, baseGrad);
+  nvgFill(vg);
+
   int tex = artwork ? artwork->getTexture() : 0;
   if (tex > 0) {
-    nvgSave(vg);
-    nvgBeginPath(vg);
-    nvgRect(vg, x, y, width, height);
+    nvgIntersectScissor(vg, x, y, width, height);
+    float side = std::max(width, height);
+    float imgX = x + (width - side) * 0.5f;
+    float imgY = y + (height - side) * 0.5f;
 
-    // 1. Imagen de portada ambiental estirada al fondo con opacidad suave
-    NVGpaint imgPaint = nvgImagePattern(vg, x, y, width, height, 0.0f, tex, 0.26f);
+    // Carátula ambiental recortada exactamente a las esquinas redondeadas del card
+    NVGpaint imgPaint = nvgImagePattern(vg, imgX, imgY, side, side, 0.0f, tex, 0.24f);
+    nvgBeginPath(vg);
+    nvgRoundedRect(vg, x, y, width, height, r);
     nvgFillPaint(vg, imgPaint);
     nvgFill(vg);
 
-    // 2. Viñeta degradada estilo BitChord: de rojo oscuro YouTube a negro obsidiana
+    // Degradado interno carmesí -> obsidiana
     NVGpaint darkOverlay = nvgLinearGradient(vg, x, y, x, y + height,
-                                             nvgRGBA(25, 7, 11, 160),
-                                             nvgRGBA(7, 7, 10, 246));
+                                             nvgRGBA(24, 8, 12, 145),
+                                             nvgRGBA(10, 10, 14, 235));
     nvgBeginPath(vg);
-    nvgRect(vg, x, y, width, height);
+    nvgRoundedRect(vg, x, y, width, height, r);
     nvgFillPaint(vg, darkOverlay);
     nvgFill(vg);
 
-    // Viñeta radial para suavizar e integrar los bordes
-    NVGpaint radialVignette = nvgRadialGradient(vg, x + width * 0.28f, y + height * 0.45f,
-                                                height * 0.25f, width * 0.85f,
-                                                nvgRGBA(0, 0, 0, 20),
-                                                nvgRGBA(5, 5, 8, 200));
+    // Viñeta radial suave enfocada en la carátula
+    NVGpaint radialVignette = nvgRadialGradient(vg, x + width * 0.30f, y + height * 0.48f,
+                                                height * 0.20f, width * 0.78f,
+                                                nvgRGBA(0, 0, 0, 15),
+                                                nvgRGBA(8, 8, 12, 185));
     nvgBeginPath(vg);
-    nvgRect(vg, x, y, width, height);
+    nvgRoundedRect(vg, x, y, width, height, r);
     nvgFillPaint(vg, radialVignette);
     nvgFill(vg);
-
-    nvgRestore(vg);
-  } else {
-    // Si no hay reproducción activa, degradado radial rojo YouTube / negro de DEMO 3 SWITCH
-    nvgSave(vg);
-    nvgBeginPath(vg);
-    nvgRect(vg, x, y, width, height);
-    NVGpaint bg = nvgRadialGradient(vg, x + width * 0.65f, y + height * 0.30f,
-                                    height * 0.18f, width * 0.90f,
-                                    nvgRGB(0x40, 0x0c, 0x14), nvgRGB(0x07, 0x07, 0x0a));
-    nvgFillPaint(vg, bg);
-    nvgFill(vg);
-    nvgRestore(vg);
   }
+
+  // Borde cristalino 1px igual al sidebar y al MiniPlayer
+  nvgBeginPath(vg);
+  nvgRoundedRect(vg, x, y, width, height, r);
+  nvgStrokeWidth(vg, 1.0f);
+  nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 24));
+  nvgStroke(vg);
+
+  nvgRestore(vg);
 
   brls::Box::draw(vg, x, y, width, height, style, ctx);
 }
@@ -1648,7 +1671,9 @@ SettingsTab::SettingsTab() : alive(std::make_shared<std::atomic_bool>(true)) {
   content->addView(updateHeader);
 
   auto* updateCard = new brls::Box();
-  updateCard->setCornerRadius(22);
+  updateCard->setCornerRadius(16);
+  updateCard->setBorderThickness(1.0f);
+  updateCard->setBorderColor(nvgRGBA(255, 255, 255, 20));
   updateCard->setBackgroundColor(swui::surfaceRaised());
   updateCard->setAxis(brls::Axis::COLUMN);
   updateCard->setPadding(20, 24, 20, 24);
@@ -1856,7 +1881,9 @@ void SettingsTab::refreshAccountSection() {
   lastAccountName = client.getAccountInfo().name;
 
   auto* card = new brls::Box();
-  card->setCornerRadius(22);
+  card->setCornerRadius(16);
+  card->setBorderThickness(1.0f);
+  card->setBorderColor(nvgRGBA(255, 255, 255, 20));
   card->setBackgroundColor(swui::surfaceRaised());
   card->setAxis(brls::Axis::COLUMN);
   card->setPadding(22, 24, 22, 24);

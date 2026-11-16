@@ -25,7 +25,7 @@
 
 static size_t CurlWriteImageData(void* contents, size_t size, size_t nmemb, void* userp) { size_t total = size * nmemb; std::string* s = static_cast<std::string*>(userp); if (s->size() + total > 1024*1024) return 0; s->append(static_cast<char*>(contents), total); return total; }
 
-static std::string fetchRemoteImageData(const std::string& url) {
+static std::string fetchRemoteImageData(const std::string& url, CURL* reusedCurl = nullptr) {
   if (url.rfind("/", 0) == 0 || url.rfind("sdmc:/", 0) == 0) {
     std::ifstream file(url, std::ios::binary | std::ios::ate);
     if (!file.is_open() && url.rfind("/", 0) == 0) {
@@ -39,8 +39,11 @@ static std::string fetchRemoteImageData(const std::string& url) {
     file.read(data.data(), len);
     return file.good() ? data : std::string{};
   }
-  CURL* curl = curl_easy_init();
+  CURL* curl = reusedCurl ? reusedCurl : curl_easy_init();
   if (!curl) return {};
+  if (reusedCurl) {
+    curl_easy_reset(curl);
+  }
   std::string buffer;
   struct curl_slist* headers = nullptr;
   headers = curl_slist_append(headers, "Accept: image/jpeg, image/png;q=0.9");
@@ -52,6 +55,8 @@ static std::string fetchRemoteImageData(const std::string& url) {
   curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
   curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
   curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
+  curl_easy_setopt(curl, CURLOPT_MAXCONNECTS, 1L);
+  curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
@@ -60,7 +65,9 @@ static std::string fetchRemoteImageData(const std::string& url) {
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
   CURLcode res = curl_easy_perform(curl);
   curl_slist_free_all(headers);
-  curl_easy_cleanup(curl);
+  if (!reusedCurl) {
+    curl_easy_cleanup(curl);
+  }
   if (res == CURLE_OK && !buffer.empty()) return buffer;
   return {};
 }
@@ -265,7 +272,7 @@ void storeMemoryImageLocked(const std::string& url, const std::string& data) {
 class ImageWorkerPool {
  public:
   ImageWorkerPool() {
-    for (int index = 0; index < 2; ++index) {
+    for (int index = 0; index < 4; ++index) {
       pthread_t pt{};
       pthread_attr_t attr;
       pthread_attr_init(&attr);
@@ -381,7 +388,7 @@ std::string formatDuration(uint32_t milliseconds) {
 }
 
 std::string upgradeThumbnailUrl(const std::string& rawUrl, int targetSize) {
-  if (rawUrl.empty() || targetSize < 300) return rawUrl;
+  if (rawUrl.empty() || targetSize < 120) return rawUrl;
   if (rawUrl.rfind("/", 0) == 0 || rawUrl.rfind("sdmc:/", 0) == 0) return rawUrl;
   std::string url = rawUrl;
   if (url.find("googleusercontent.com") != std::string::npos ||
@@ -411,9 +418,10 @@ std::string upgradeThumbnailUrl(const std::string& rawUrl, int targetSize) {
       url += targetWh + "-l90-rj";
     }
   } else if (url.find("i.ytimg.com") != std::string::npos) {
-    auto pos = url.find("/default.jpg");
-    if (pos != std::string::npos) {
+    if (auto pos = url.find("/default.jpg"); pos != std::string::npos) {
       url.replace(pos, 12, "/hqdefault.jpg");
+    } else if (auto pos2 = url.find("/mqdefault.jpg"); pos2 != std::string::npos) {
+      url.replace(pos2, 14, "/hqdefault.jpg");
     }
   }
   return url;
@@ -422,7 +430,7 @@ std::string upgradeThumbnailUrl(const std::string& rawUrl, int targetSize) {
 void loadRemoteImage(brls::Image* image, const std::string& url,
                      int preferredSize) {
   if (!image || url.empty()) return;
-  std::string resolvedUrl = (preferredSize >= 300) ? upgradeThumbnailUrl(url, preferredSize) : url;
+  std::string resolvedUrl = (preferredSize >= 120) ? upgradeThumbnailUrl(url, preferredSize) : url;
 
   image->setScalingType(brls::ImageScalingType::FIT);
   const int cachedTexture =
@@ -456,7 +464,11 @@ void loadRemoteImage(brls::Image* image, const std::string& url,
         }
       }
       if (data.empty()) {
-        data = fetchRemoteImageData(url);
+        thread_local struct CurlHolder {
+          CURL* handle = curl_easy_init();
+          ~CurlHolder() { if (handle) curl_easy_cleanup(handle); }
+        } curlHolder;
+        data = fetchRemoteImageData(url, curlHolder.handle);
         if (!data.empty() && data.size() <= kMaxEncodedImageBytes && isSupportedImageData(data)) {
           std::lock_guard<std::mutex> lock(imageCacheMutex);
           storeMemoryImageLocked(url, data);
@@ -597,8 +609,9 @@ void FilterChip::setText(const std::string& nextText) {
 
 void FilterChip::applyStyle(bool focused) {
   setBackgroundColor(selected ? accent() : surfaceRaised());
-  label->setTextColor(selected && !focused ? nvgRGB(8, 20, 12)
-                                           : textPrimary());
+  setBorderThickness(selected ? 0.0f : 1.0f);
+  setBorderColor(nvgRGBA(255, 255, 255, focused ? 80 : 22));
+  label->setTextColor(textPrimary());
 }
 
 RepeatIcon::RepeatIcon() {
@@ -861,7 +874,9 @@ brls::Box* makeStatePanel(const std::string& title,
   auto* panel = new brls::Box();
   panel->setAxis(brls::Axis::COLUMN);
   panel->setPadding(18, 20, 18, 20);
-  panel->setCornerRadius(10);
+  panel->setCornerRadius(14);
+  panel->setBorderThickness(1.0f);
+  panel->setBorderColor(nvgRGBA(255, 255, 255, 20));
   panel->setBackgroundColor(tint);
   auto* heading = makeLabel(title, 20, textPrimary(), false);
   auto* body = makeLabel(detail, 16, textSecondary(), false);
@@ -877,8 +892,10 @@ MediaCard::MediaCard() {
   setAxis(brls::Axis::COLUMN);
   setFocusable(true);
   setDimensions(180, 244);
-  setCornerRadius(10);
-  setHighlightCornerRadius(10);
+  setCornerRadius(12);
+  setHighlightCornerRadius(12);
+  setBorderThickness(1.0f);
+  setBorderColor(nvgRGBA(255, 255, 255, 16));
   setBackgroundColor(surface());
   setPadding(8, 8, 10, 8);
   addGestureRecognizer(new brls::TapGestureRecognizer(this));
@@ -915,7 +932,7 @@ void MediaCard::setContent(const std::string& title,
                            const std::string& imageUrl) {
   titleLabel->setText(title);
   subtitleLabel->setText(subtitle);
-  if (!imageUrl.empty()) loadRemoteImage(artwork, imageUrl);
+  if (!imageUrl.empty()) loadRemoteImage(artwork, imageUrl, 360);
 }
 
 void MediaCard::setAction(std::function<void()> action) {
@@ -1086,7 +1103,7 @@ void TrackRow::setTrack(const switube::YtTrack& track, size_t index,
   durationLabel->setText(canDownload ? formatDuration(track.durationMs) : "");
   durationLabel->setVisibility(canDownload ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
   if (artworkEnabled && !track.imageUrl.empty())
-    loadRemoteImage(artwork, track.imageUrl);
+    loadRemoteImage(artwork, track.imageUrl, 240);
   onSelected = std::move(action);
 
   if (canDownload) {

@@ -36,6 +36,22 @@ class MainActivity : public brls::Activity {
     registerPlaybackShortcuts(this);
     updateSidebarLabels();
 
+    if (auto* frame = getContentView()) {
+      frame->setBackgroundColor(nvgRGB(7, 7, 10));
+      if (auto* footer = frame->getView("brls/applet_frame/footer")) {
+        footer->setBackgroundColor(nvgRGB(7, 7, 10));
+      }
+    }
+    if (tabFrame) {
+      if (auto* sidebar = dynamic_cast<brls::Sidebar*>(tabFrame->getView("brls/tab_frame/sidebar"))) {
+        sidebar->setBackgroundColor(nvgRGBA(16, 10, 14, 115));
+        sidebar->setCornerRadius(16);
+        sidebar->setMargins(14, 0, 6, 18);
+        sidebar->setBorderThickness(1.0f);
+        sidebar->setBorderColor(nvgRGBA(255, 255, 255, 20));
+      }
+    }
+
     auto token = alive;
     i18nObserverId = switube::I18n::getInstance().addObserver([this, token]() {
       brls::sync([this, token]() {
@@ -97,6 +113,19 @@ int main(int argc, char* argv[]) {
   swplatform::preventSleep(true);
   brls::Application::getPlatform()->setThemeVariant(brls::ThemeVariant::DARK);
   brls::Application::setGlobalQuit(false);
+
+  // Tema unificado Switube (obsidiana + carmesí YouTube Music, sin barras grises ni foco cian)
+  auto theme = brls::Application::getTheme();
+  theme.addColor("brls/background", nvgRGB(7, 7, 10));
+  theme.addColor("brls/accent", nvgRGB(255, 45, 60));
+  theme.addColor("brls/highlight/background", nvgRGB(24, 18, 22));
+  theme.addColor("brls/highlight/color1", nvgRGB(255, 45, 60));
+  theme.addColor("brls/highlight/color2", nvgRGB(255, 118, 130));
+  theme.addColor("brls/applet_frame/separator", nvgRGBA(255, 255, 255, 16));
+  theme.addColor("brls/sidebar/background", nvgRGBA(0, 0, 0, 0));
+  theme.addColor("brls/sidebar/active_item", nvgRGB(255, 45, 60));
+  theme.addColor("brls/sidebar/separator", nvgRGBA(0, 0, 0, 0));
+  theme.addColor("brls/dialog/backdrop", nvgRGBA(4, 4, 8, 190));
 
   auto style = brls::Application::getStyle();
   style.addMetric("brls/tab_frame/sidebar_width", 280.0f);

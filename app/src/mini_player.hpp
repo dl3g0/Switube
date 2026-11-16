@@ -18,6 +18,9 @@ class MiniPlayer : public brls::Box {
   MiniPlayer();
   ~MiniPlayer() override;
 
+  void draw(NVGcontext* vg, float x, float y, float width, float height,
+            brls::Style style, brls::FrameContext* ctx) override;
+
   static brls::View* create() { return new MiniPlayer(); }
 
  private:

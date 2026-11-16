@@ -8,9 +8,11 @@ MiniPlayer::MiniPlayer()
     : alive(std::make_shared<std::atomic_bool>(true)) {
   setAxis(brls::Axis::ROW);
   setAlignItems(brls::AlignItems::CENTER);
-  setHeight(82);
-  setPadding(9, 34, 9, 34);
-  setBackgroundColor(nvgRGB(17, 20, 24));
+  setHeight(76);
+  setMargins(4, 24, 10, 24);
+  setPadding(8, 22, 10, 18);
+  setCornerRadius(16);
+  setBackgroundColor(nvgRGBA(0, 0, 0, 0));
 
   artwork = new brls::Image();
   artwork->setDimensions(62, 62);
@@ -120,6 +122,58 @@ MiniPlayer::~MiniPlayer() {
   }
 }
 
+void MiniPlayer::draw(NVGcontext* vg, float x, float y, float width, float height,
+                      brls::Style style, brls::FrameContext* ctx) {
+  const float r = 16.0f;
+
+  nvgSave(vg);
+  // Sombra suave flotante
+  NVGpaint shadow = nvgBoxGradient(vg, x, y + 3.0f, width, height, r, 14.0f,
+                                   nvgRGBA(0, 0, 0, 130), nvgRGBA(0, 0, 0, 0));
+  nvgBeginPath(vg);
+  nvgRect(vg, x - 12.0f, y - 8.0f, width + 24.0f, height + 24.0f);
+  nvgRoundedRect(vg, x, y, width, height, r);
+  nvgPathWinding(vg, NVG_HOLE);
+  nvgFillPaint(vg, shadow);
+  nvgFill(vg);
+
+  // Fondo obsidiana translúcido + borde cristalino 1px
+  nvgBeginPath(vg);
+  nvgRoundedRect(vg, x, y, width, height, r);
+  nvgFillColor(vg, nvgRGBA(18, 19, 27, 240));
+  nvgFill(vg);
+
+  nvgStrokeWidth(vg, 1.0f);
+  nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 24));
+  nvgStroke(vg);
+
+  // Barra de progreso en vivo en el borde inferior
+  const auto now = switube::YtEngine::getInstance().getNowPlaying();
+  if (!now.id.empty() && now.durationMs > 0) {
+    float progress = std::clamp(
+        static_cast<float>(now.positionMs) / static_cast<float>(now.durationMs),
+        0.0f, 1.0f);
+    float barPad = 14.0f;
+    float barW = std::max(0.0f, width - barPad * 2.0f);
+    float barY = y + height - 3.5f;
+
+    nvgBeginPath(vg);
+    nvgRoundedRect(vg, x + barPad, barY, barW, 2.5f, 1.25f);
+    nvgFillColor(vg, nvgRGBA(255, 255, 255, 22));
+    nvgFill(vg);
+
+    if (progress > 0.005f) {
+      nvgBeginPath(vg);
+      nvgRoundedRect(vg, x + barPad, barY, barW * progress, 2.5f, 1.25f);
+      nvgFillColor(vg, swui::accent());
+      nvgFill(vg);
+    }
+  }
+  nvgRestore(vg);
+
+  brls::Box::draw(vg, x, y, width, height, style, ctx);
+}
+
 void MiniPlayer::handleDownloadCurrentTrack() {
   auto& engine = switube::YtEngine::getInstance();
   const auto now = engine.getNowPlaying();
@@ -170,7 +224,7 @@ void MiniPlayer::refresh() {
 
     if (!snapshot.imageUrl.empty() && snapshot.imageUrl != loadedArtworkUrl) {
       loadedArtworkUrl = snapshot.imageUrl;
-      swui::loadRemoteImage(artwork, snapshot.imageUrl);
+      swui::loadRemoteImage(artwork, snapshot.imageUrl, 240);
     }
 
     if (downloadBtn && downloadBadge) {

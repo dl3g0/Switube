@@ -108,6 +108,7 @@ class YtEngine {
 
   std::atomic<bool> isRunning_{false};
   std::atomic<uint64_t> playRequestGen_{0};
+  std::atomic<int> consecutiveResolveFails_{0};
   std::chrono::steady_clock::time_point positionMeasuredAt_;
 };
 
