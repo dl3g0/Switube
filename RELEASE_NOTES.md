@@ -80,14 +80,13 @@ Esta versión inicial **v0.1.0** incluye tanto la aplicación principal a pantal
 ---
 
 ### 🎮 Overlay y Motor en Segundo Plano (`Switube.ovl` + `exefs.nsp`)
-- **Música Mientras Juegas:** Escucha tus canciones descargadas o transmite directamente desde YouTube Music sin salir de tus juegos.
+- **Música Mientras Juegas (Solo Descargas Offline):** Escucha **exclusivamente tus canciones descargadas** en segundo plano sin salir de tus juegos.
 - **Sysmodule Ultraligero (`0x4200000000535755`):**
-  - Huella de memoria reducida (~10 MB) con compilación minimalista de **FFmpeg** (demuxers `webm/matroska`, `mp4/mov`, `ogg` y decodificadores `opus` y `aac`) para total compatibilidad con los juegos de Nintendo Switch.
+  - Huella de memoria reducida (~4 MB en RAM) con compilación minimalista de **FFmpeg** (demuxers `webm/matroska`, `mp4/mov`, `ogg` y decodificadores `opus` y `aac`) para total compatibilidad con los juegos de Nintendo Switch.
   - Adquisición diferida de `audout`: el servicio no reserva recursos de audio hasta que inicia la reproducción.
 - **Overlay Interactivo para Ultrahand / Tesla:**
   - **Vista *En Reproducción*:** Navegación por zonas con D-Pad, Sticks o pantalla táctil sobre la barra de tiempo (±10 s), los 5 botones de transporte (*Repetir*, *Anterior*, *Play/Pausa*, *Siguiente*, *Aleatorio*) y la barra de volumen (pasos de 5%).
-  - **Descargas Offline:** Reproduce al instante cualquier canción descargada previamente desde la aplicación principal.
-  - **Búsqueda en Línea:** Teclado integrado en el overlay para buscar y reproducir pistas de YouTube Music en cualquier momento.
+  - **Descargas Offline:** Reproduce al instante y filtra por nombre o artista cualquier canción descargada previamente desde la aplicación principal.
 
 ---
 

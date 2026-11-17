@@ -58,12 +58,11 @@ Switube está compuesto por dos módulos diseñados para funcionar tanto de form
 - **Multilenguaje Automático:** Detección automática del idioma del sistema de la consola (**Español** / **Inglés**) con selector en vivo desde *Ajustes*.
 
 ### 🎮 Overlay y Motor en Segundo Plano (`Switube.ovl` + `exefs.nsp`)
-- **Música Mientras Juegas:** Reproduce pistas descargadas o transmite directamente desde YouTube Music sin salir de tu partida.
-- **Huella de Memoria Optimizada (~10 MB):** El sysmodule (`0x4200000000535755`) utiliza un compilado a medida de **FFmpeg** (únicamente demuxers `matroska/webm`, `mov/mp4`, `ogg` y decodificadores `opus` y `aac`) y adquiere `audout` bajo demanda solo cuando hay audio activo.
+- **Música Mientras Juegas (Solo Descargas Offline):** Reproduce **exclusivamente tus canciones descargadas** en segundo plano sin salir de tu partida (sin streaming en línea para mantener el uso de System RAM al mínimo y total estabilidad con los juegos).
+- **Huella de Memoria Optimizada (~4 MB en RAM):** El sysmodule (`0x4200000000535755`) utiliza un compilado a medida de **FFmpeg** (únicamente demuxers `matroska/webm`, `mov/mp4`, `ogg` y decodificadores `opus` y `aac`) y adquiere `audout` bajo demanda solo cuando hay audio activo.
 - **Navegación Completa en el Overlay:**
   - **En Reproducción:** Tarjeta interactiva con barra de progreso, controles de transporte (**Repetir**, **Anterior**, **Play/Pausa**, **Siguiente**, **Aleatorio**) y deslizador de volumen.
-  - **Descargas Offline:** Acceso instantáneo a todas las canciones descargadas desde la app principal.
-  - **Buscar en YouTube Music:** Teclado integrado en el overlay para buscar y reproducir cualquier canción en línea al vuelo.
+  - **Canciones Descargadas:** Acceso instantáneo y filtro de búsqueda por nombre o artista sobre todas las pistas descargadas desde la app principal.
 
 ---
 
@@ -162,17 +161,24 @@ Sigue estos pasos para escuchar música mientras juegas cualquier título en tu 
    - Abre **Ultrahand** (`L + D-Pad Abajo + R3`) y entra a **Sysmodules**.
    - El sysmodule de Switube necesita aproximadamente **~3.5 – 4.5 MB** de *System RAM* (heap de 1.5 MB + binario + buffers).
    - Si tienes otros sysmodules activos al mismo tiempo (como `SysDVR`, `MissionControl`, `sys-con` o `SaltyNX`) y ves menos de **5 MB libres**, apaga temporalmente alguno que no estés usando en esa partida (por ejemplo `SysDVR`).
-3. ***(Opcional)* Descarga canciones para modo offline:**
-   - Entra a la app principal **`Switube.nro`** (recomendado con *Title Override*) y pulsa **`X`** sobre cualquier canción para guardarla en `sdmc:/config/Switube/downloads/`. Así podrás reproducirla al instante incluso sin Wi-Fi.
+3. **Descarga primero las canciones que quieras escuchar (obligatorio para segundo plano):**
+   - La reproducción en segundo plano funciona **únicamente con canciones descargadas en la microSD** (no se permite streaming en segundo plano para no agotar la System RAM mientras juegas).
+   - Entra a la app principal **`Switube.nro`** (recomendado con *Title Override*) y pulsa **`X`** sobre cualquier canción para guardarla en `sdmc:/config/Switube/downloads/`.
 4. **Inicia la música desde tu juego:**
    - Abre tu juego favorito (o quédate en el menú HOME).
    - Abre **Ultrahand** con **`L + D-Pad Abajo + R3`** y selecciona **Switube**.
-   - Elige **Canciones descargadas** (offline) o **Buscar en YouTube Music** (streaming en línea) y pulsa **`A`** para reproducir.
+   - Entra a **Canciones descargadas** (puedes filtrar por nombre o artista) y pulsa **`A`** para reproducir.
    - Cierra el overlay con **`B`**: la música seguirá sonando en segundo plano mientras juegas y podrás volver a abrirlo en cualquier momento para pausar, cambiar de canción o ajustar el volumen.
 
 ---
 
 ## ❓ Preguntas Frecuentes (FAQ)
+
+<details>
+<summary><b>¿Puedo reproducir música por streaming en segundo plano mientras juego?</b></summary>
+<br/>
+No. La reproducción en segundo plano mediante el overlay y sysmodule está limitada <b>exclusivamente a canciones descargadas</b> en la microSD (<code>sdmc:/config/Switube/downloads/</code>). Esto mantiene el consumo de System RAM al mínimo (~3.5–4.5 MB) y evita conflictos de red o memoria con los juegos. Para reproducir por streaming usa la aplicación principal <code>Switube.nro</code>.
+</details>
 
 <details>
 <summary><b>¿Necesito una cuenta de YouTube Premium para usar Switube?</b></summary>
