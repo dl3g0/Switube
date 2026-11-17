@@ -170,6 +170,17 @@ Sigue estos pasos para escuchar música mientras juegas cualquier título en tu 
    - Entra a **Canciones descargadas** (puedes filtrar por nombre o artista) y pulsa **`A`** para reproducir.
    - Cierra el overlay con **`B`**: la música seguirá sonando en segundo plano mientras juegas y podrás volver a abrirlo en cualquier momento para pausar, cambiar de canción o ajustar el volumen.
 
+### 🔄 Cómo reactivar el servicio si aparece inactivo
+
+Si al abrir el overlay ves que no conecta con el motor de audio o el servicio aparece apagado (`Off`), sigue estos pasos:
+
+1. Abre **Ultrahand** (`L + D-Pad Abajo + R3`) y entra en **Sysmodules**.
+2. Revisa arriba a la derecha cuánta **System RAM** libre tienes (Switube necesita al menos **~4.5 MB libres** para arrancar).
+3. Si tienes menos de **5 MB libres**, apaga temporalmente otro sysmodule que no estés usando en ese momento (por ejemplo `SysDVR`, `sys-con` o `MissionControl`).
+4. Busca **Switube background** en la lista **Dynamic** y pulsa **`A` (Toggle)** para cambiarlo de `X | Off` a **`On`**.
+5. *(Opcional)* Si deseas que arranque automáticamente al encender la consola, pulsa **`Y` (Auto Start)** — aunque se recomienda dejarlo en `Off` cuando no escuches música para ahorrar *System RAM*.
+6. Regresa al menú principal de Ultrahand y abre **Switube** normalmente.
+
 ---
 
 ## ❓ Preguntas Frecuentes (FAQ)
