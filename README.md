@@ -21,6 +21,8 @@
 [Galería](#-galería) •
 [Controles](#-controles) •
 [Instalación](#-instalación-en-la-microsd) •
+[Segundo Plano](#-cómo-reproducir-música-en-segundo-plano) •
+[FAQ](#-preguntas-frecuentes-faq) •
 [Arquitectura](#-arquitectura-del-proyecto) •
 [Compilación](#-compilación-desde-el-código-fuente) •
 [Créditos](#-créditos-y-agradecimientos)
@@ -145,6 +147,73 @@ sdmc:/
    - Se recomienda abrirla mediante **Title Override** para disponer de toda la memoria RAM de la consola: mantén presionado **`R`** mientras abres cualquier juego hasta que aparezca el *Homebrew Menu*, y lanza **Switube**.
 4. **Para usar el Overlay (`Switube.ovl`):**
    - Abre el menú de **Ultrahand / Tesla** (`L + D-Pad Abajo + Stick Derecho`) en cualquier momento y selecciona **Switube**. El sysmodule se iniciará automáticamente bajo demanda.
+
+---
+
+## 🎧 Cómo reproducir música en segundo plano
+
+Sigue estos pasos para escuchar música mientras juegas cualquier título en tu Nintendo Switch usando **Ultrahand / Tesla**:
+
+1. **Prepara los archivos en la microSD:**
+   - Asegúrate de haber extraído `Switube-Complete-SD.zip` en la raíz de tu microSD, verificando que existan:
+     - `sdmc:/atmosphere/contents/4200000000535755/exefs.nsp` y `toolbox.json`
+     - `sdmc:/switch/.overlays/Switube.ovl`
+2. **Verifica que tengas System RAM libre (~4.5 MB o más):**
+   - Abre **Ultrahand** (`L + D-Pad Abajo + R3`) y entra a **Sysmodules**.
+   - El sysmodule de Switube necesita aproximadamente **~3.5 – 4.5 MB** de *System RAM* (heap de 1.5 MB + binario + buffers).
+   - Si tienes otros sysmodules activos al mismo tiempo (como `SysDVR`, `MissionControl`, `sys-con` o `SaltyNX`) y ves menos de **5 MB libres**, apaga temporalmente alguno que no estés usando en esa partida (por ejemplo `SysDVR`).
+3. ***(Opcional)* Descarga canciones para modo offline:**
+   - Entra a la app principal **`Switube.nro`** (recomendado con *Title Override*) y pulsa **`X`** sobre cualquier canción para guardarla en `sdmc:/config/Switube/downloads/`. Así podrás reproducirla al instante incluso sin Wi-Fi.
+4. **Inicia la música desde tu juego:**
+   - Abre tu juego favorito (o quédate en el menú HOME).
+   - Abre **Ultrahand** con **`L + D-Pad Abajo + R3`** y selecciona **Switube**.
+   - Elige **Canciones descargadas** (offline) o **Buscar en YouTube Music** (streaming en línea) y pulsa **`A`** para reproducir.
+   - Cierra el overlay con **`B`**: la música seguirá sonando en segundo plano mientras juegas y podrás volver a abrirlo en cualquier momento para pausar, cambiar de canción o ajustar el volumen.
+
+---
+
+## ❓ Preguntas Frecuentes (FAQ)
+
+<details>
+<summary><b>¿Necesito una cuenta de YouTube Premium para usar Switube?</b></summary>
+<br/>
+No. Switube funciona de forma gratuita sin suscripción Premium. Además, desde la pestaña <b>Ajustes</b> puedes vincular tu cuenta normal de YouTube Music mediante código QR para sincronizar tus <i>Me gusta</i>, listas de reproducción y recomendaciones.
+</details>
+
+<details>
+<summary><b>El sysmodule de Switube aparece en "Off" o no se activa en Ultrahand → Sysmodules</b></summary>
+<br/>
+Casi siempre ocurre por falta de <b>System RAM</b> libre. Atmosphère reserva un espacio muy limitado para sysmodules; si tienes activos simultáneamente <code>SysDVR</code>, <code>sys-con</code>, <code>MissionControl</code> y <code>SaltyNX</code>, la memoria libre puede bajar de ~4.5 MB y el sistema impedirá iniciar Switube. Apaga temporalmente alguno de los otros sysmodules (especialmente <code>SysDVR</code>) e inténtalo de nuevo.
+</details>
+
+<details>
+<summary><b>¿Debo activar "Auto Start" para el sysmodule?</b></summary>
+<br/>
+No es obligatorio. Dejar <i>Auto Start</i> desactivado evita ocupar ~4 MB de System RAM cuando no estás escuchando música; el overlay o el toggle de Sysmodules lo iniciarán cuando lo necesites.
+</details>
+
+<details>
+<summary><b>¿Por qué se recomienda abrir Switube.nro con Title Override?</b></summary>
+<br/>
+El <i>Applet Mode</i> (abrir el Álbum sin mantener <code>R</code>) limita la memoria RAM disponible para la aplicación. Al mantener presionado <b>R</b> sobre cualquier juego hasta entrar al Homebrew Menu, <code>Switube.nro</code> dispone de toda la RAM de la consola para navegar fluidamente, cachear portadas HD y descargar canciones sin problemas.
+</details>
+
+<details>
+<summary><b>¿Cómo actualizo Switube a una nueva versión?</b></summary>
+<br/>
+Switube incluye un auto-actualizador en <b>Ajustes → Actualizaciones → Buscar actualizaciones</b> (y también comprueba silenciosamente al iniciar). Descarga automáticamente <code>Switube-Complete-SD.zip</code> desde GitHub Releases, actualiza el overlay/sysmodule en la microSD y aplica el nuevo <code>Switube.nro</code> al reiniciar la app.
+</details>
+
+<details>
+<summary><b>¿Dónde se guardan las descargas, la sesión vinculada y los logs?</b></summary>
+<br/>
+Todo se almacena dentro de <code>sdmc:/config/Switube/</code>:
+<ul>
+  <li><b>Canciones offline:</b> <code>/config/Switube/downloads/</code></li>
+  <li><b>Sesión vinculada (OAuth):</b> <code>/config/Switube/auth.json</code></li>
+  <li><b>Registro de diagnóstico (log):</b> <code>/config/Switube/app.log</code></li>
+</ul>
+</details>
 
 ---
 
