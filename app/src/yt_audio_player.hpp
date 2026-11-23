@@ -3,10 +3,16 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
 #include <functional>
 #include <cstdint>
 #include <memory>
+
+#ifdef __SWITCH__
+#include <switch.h>
+#endif
+#include <pthread.h>
 
 class NXAudioSink;
 
@@ -19,7 +25,7 @@ class YtAudioPlayer {
   bool init();
   void shutdown();
 
-  // Inicia la reproducción de una URL directa de audio (Opus/WebM/AAC)
+  // Inicia la reproducción de una URL directa de audio o ruta local (Opus/WebM/AAC)
   void play(const std::string& streamUrl, uint32_t durationMs = 0, uint64_t contentLength = 0);
   void pause();
   void resume();
@@ -43,11 +49,21 @@ class YtAudioPlayer {
   }
 
  private:
+  struct PlayJob {
+    std::string url;
+    uint32_t durationMs = 0;
+    uint64_t contentLength = 0;
+    uint64_t generation = 0;
+    std::shared_ptr<std::atomic<bool>> stopToken;
+  };
+
   YtAudioPlayer();
   ~YtAudioPlayer();
 
-  void audioWorker(std::string url, uint32_t durMs, uint64_t contentLength, uint64_t generation,
-                   std::shared_ptr<std::atomic<bool>> stopToken);
+  void ensureWorkerStarted();
+  void stopWorker();
+  void workerLoop();
+  bool runDecodeSession(const PlayJob& job, std::vector<uint8_t>& pcmOut);
 
   std::unique_ptr<NXAudioSink> sink_;
   std::atomic<bool> isPlaying_{false};
@@ -61,7 +77,20 @@ class YtAudioPlayer {
   std::shared_ptr<std::atomic<bool>> currentToken_;
   std::mutex controlMutex_;
   std::mutex sinkMutex_;
-  std::mutex workerMutex_;
+
+  std::mutex jobMutex_;
+  std::condition_variable jobCv_;
+  PlayJob pendingJob_;
+  bool hasPendingJob_ = false;
+  bool workerStop_ = false;
+  bool workerStarted_ = false;
+
+#ifdef SWITUBE_BACKGROUND_SERVICE
+  Thread nxWorkerThread_{};
+#else
+  pthread_t pthreadWorker_{};
+#endif
+
   std::function<void()> onComplete_;
   std::function<void()> onStart_;
 };

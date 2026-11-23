@@ -1,3 +1,27 @@
+# 🚀 Switube v0.2.1 — Estabilidad en Segundo Plano y Reproducción Aleatoria / En Orden
+
+Esta actualización **v0.2.1** corrige la interrupción del servicio de audio tras reproducir varias canciones seguidas mientras juegas y añade soporte completo para alternar entre reproducción **En orden** y **Aleatoria (Shuffle)** tanto en la aplicación principal como en el overlay.
+
+---
+
+## ✨ Novedades de la Versión 0.2.1
+
+### 🛠️ Estabilidad del Motor en Segundo Plano (`exefs.nsp`)
+- **Fix de corte tras 2–4 canciones en juego (ej. *Mario Kart*):** Reemplazada la creación de un `pthread` nuevo de 128 KiB en cada cambio de pista por un **hilo decodificador único y persistente** con pila estática BSS de 128 KiB en modo servicio (`threadCreate`). Esto elimina la fragmentación/agotamiento del heap estático de 1.5 MiB del sysmodule y evita deadlocks al encadenar pistas automáticamente.
+- **Limpieza determinística entre pistas:** Reutilización de un único buffer PCM y cierre completo de contextos de FFmpeg y descriptores locales (`BufferReader`) antes de disparar `onComplete_()`.
+- **Avance garantizado en descargas locales:** Corrección en el cálculo de fin de pista al recibir `AVERROR_EOF` sobre archivos descargados para encadenar sesiones largas sin detener la cola.
+
+### 🔀 Dualidad Aleatorio / En Orden y Repetición
+- **Aplicación Principal (`Switube.nro`):**
+  - Botones duales **En orden** / **Aleatorio** en **Listas de reproducción y Álbumes** (`TrackListActivity`), **Favoritos** y **Descargas**.
+  - Controles de **Aleatorio (Shuffle)** y **Repetir** (`Off` / `Una` / `Todas`) integrados en la barra de transporte de **En reproducción** (`NowPlayingTab`).
+  - Al pulsar una canción dentro de una lista, favoritos, descargas o perfil de artista, se respeta si el modo aleatorio está activo o en orden secuencial.
+- **Overlay (`Switube.ovl` `v0.2.1-lite1`) y Sysmodule (`0.2.1`):**
+  - Acceso directo **`Reproducir aleatorio`** al inicio de la lista de *Canciones descargadas* dentro del overlay.
+  - Sincronización IPC completa de los modos `Shuffle` y `Repeat` (`Off` / `One` / `All`) entre el overlay y el sysmodule (`Y` para Aleatorio y `X` para Repetir).
+
+---
+
 # 🚀 Switube v0.2.0 — Sincronización con Cuenta, Auto-Actualizador y Rediseño UI/UX
 
 Esta actualización **v0.2.0** introduce vinculación oficial con tu cuenta de YouTube Music mediante código QR, sincronización completa de biblioteca, paginación infinita, auto-actualizador desde GitHub Releases, un rediseño visual completo en estilo obsidiana/carmesí y múltiples correcciones críticas de estabilidad.

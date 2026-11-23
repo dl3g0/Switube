@@ -34,7 +34,7 @@ void TrackListActivity::onContentAvailable() {
 
   playAll->registerClickAction([this](brls::View*) {
     if (!currentTracks.empty()) {
-      switube::YtEngine::getInstance().playQueue(currentTracks, 0);
+      switube::YtEngine::getInstance().playQueueWithMode(currentTracks, 0, false);
     }
     return true;
   });
@@ -44,6 +44,25 @@ void TrackListActivity::onContentAvailable() {
   });
   playAll->getFocusLostEvent()->subscribe([this](brls::View*) {
     playAllLabel->setTextColor(playAll->isFocusable() ? swui::textPrimary() : swui::textSecondary());
+  });
+
+  playShuffle->setFocusable(false);
+  playShuffle->setBackgroundColor(swui::surfaceRaised());
+  playShuffleLabel->setText(tr("tracklist.play_shuffle"));
+  playShuffleLabel->setTextColor(swui::textSecondary());
+
+  playShuffle->registerClickAction([this](brls::View*) {
+    if (!currentTracks.empty()) {
+      switube::YtEngine::getInstance().playQueueShuffled(currentTracks);
+    }
+    return true;
+  });
+  playShuffle->addGestureRecognizer(new brls::TapGestureRecognizer(playShuffle));
+  playShuffle->getFocusEvent()->subscribe([this](brls::View*) {
+    playShuffleLabel->setTextColor(swui::textPrimary());
+  });
+  playShuffle->getFocusLostEvent()->subscribe([this](brls::View*) {
+    playShuffleLabel->setTextColor(playShuffle->isFocusable() ? swui::textPrimary() : swui::textSecondary());
   });
 
   list->addView(swui::makeStatePanel(
@@ -98,7 +117,14 @@ void TrackListActivity::showTracks(const std::vector<switube::YtTrack>& tracks, 
 
     if (tracks.empty()) {
       subtitle->setText(tr("tracklist.empty_title"));
+      playAll->setFocusable(false);
+      playAll->setBackgroundColor(swui::surfaceRaised());
       playAllLabel->setText(tr("tracklist.empty_title"));
+      playAllLabel->setTextColor(swui::textSecondary());
+      playShuffle->setFocusable(false);
+      playShuffle->setBackgroundColor(swui::surfaceRaised());
+      playShuffleLabel->setText(tr("tracklist.empty_title"));
+      playShuffleLabel->setTextColor(swui::textSecondary());
       list->addView(swui::makeStatePanel(
           tr("tracklist.empty_title"),
           tr("tracklist.empty_desc")));
@@ -136,10 +162,16 @@ void TrackListActivity::showTracks(const std::vector<switube::YtTrack>& tracks, 
   playAll->setBackgroundColor(swui::accent());
   playAllLabel->setTextColor(swui::textPrimary());
 
+  playShuffleLabel->setText(tr("tracklist.play_shuffle"));
+  playShuffle->setFocusable(true);
+  playShuffle->setBackgroundColor(swui::surfaceRaised());
+  playShuffleLabel->setTextColor(swui::textPrimary());
+
   for (size_t i = startIdx; i < currentTracks.size(); ++i) {
     auto* row = new swui::TrackRow();
     row->setTrack(currentTracks[i], i, [this, i]() {
-      switube::YtEngine::getInstance().playQueue(currentTracks, i);
+      auto& eng = switube::YtEngine::getInstance();
+      eng.playQueueWithMode(currentTracks, i, eng.isShuffle());
     });
     row->getFocusEvent()->subscribe([this, i](brls::View*) {
       if (!continuationToken.empty() && !isLoadingMore && i + 5 >= currentTracks.size()) {

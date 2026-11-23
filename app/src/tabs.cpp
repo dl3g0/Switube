@@ -884,13 +884,41 @@ void LibraryTab::refresh() {
       return;
     }
 
+    if (!isAppend) {
+      auto* actionRow = new brls::Box();
+      actionRow->setAxis(brls::Axis::ROW);
+      actionRow->setAlignItems(brls::AlignItems::CENTER);
+      actionRow->setMarginBottom(14);
+
+      auto* playOrderBtn = swui::makeActionButton("▶ " + tr("library.play_order"), [](brls::View*) {
+        auto allFavs = switube::YtEngine::getInstance().getFavorites();
+        if (!allFavs.empty()) {
+          switube::YtEngine::getInstance().playQueueWithMode(allFavs, 0, false);
+        }
+        return true;
+      }, true);
+      auto* playShuffleBtn = swui::makeActionButton(tr("library.play_shuffle"), [](brls::View*) {
+        auto allFavs = switube::YtEngine::getInstance().getFavorites();
+        if (!allFavs.empty()) {
+          switube::YtEngine::getInstance().playQueueShuffled(allFavs);
+        }
+        return true;
+      }, false);
+      playShuffleBtn->setMarginLeft(12);
+
+      actionRow->addView(playOrderBtn);
+      actionRow->addView(playShuffleBtn);
+      content->addView(actionRow);
+    }
+
     for (size_t i = startIdx; i < favorites.size(); ++i) {
       const auto& track = favorites[i];
       auto* row = new swui::TrackRow();
       row->setTrack(track, i, [i]() {
         auto allFavs = switube::YtEngine::getInstance().getFavorites();
         if (i < allFavs.size()) {
-          switube::YtEngine::getInstance().playQueue(allFavs, i);
+          auto& eng = switube::YtEngine::getInstance();
+          eng.playQueueWithMode(allFavs, i, eng.isShuffle());
         }
       });
       row->getFocusEvent()->subscribe([this, i](brls::View*) {
@@ -1018,19 +1046,32 @@ void DownloadsTab::refresh() {
            (tracks.size() == 1 ? "canción" : "canciones"), mb);
   if (subtitleLabel) subtitleLabel->setText(buf);
 
-  // Botón "Reproducir todo"
-  auto* playAllBtn = swui::makeActionButton("▶ " + tr("downloads.play_all"), [tracks](brls::View*) {
-    switube::YtEngine::getInstance().playQueue(tracks, 0);
+  // Botones "En orden" y "Aleatorio"
+  auto* actionRow = new brls::Box();
+  actionRow->setAxis(brls::Axis::ROW);
+  actionRow->setAlignItems(brls::AlignItems::CENTER);
+  actionRow->setMarginBottom(14);
+
+  auto* playAllBtn = swui::makeActionButton("▶ " + tr("library.play_order"), [tracks](brls::View*) {
+    switube::YtEngine::getInstance().playQueueWithMode(tracks, 0, false);
     return true;
   }, true);
-  playAllBtn->setMarginBottom(14);
-  content->addView(playAllBtn);
+  auto* playShuffleBtn = swui::makeActionButton(tr("downloads.play_shuffle"), [tracks](brls::View*) {
+    switube::YtEngine::getInstance().playQueueShuffled(tracks);
+    return true;
+  }, false);
+  playShuffleBtn->setMarginLeft(12);
+
+  actionRow->addView(playAllBtn);
+  actionRow->addView(playShuffleBtn);
+  content->addView(actionRow);
 
   for (size_t i = 0; i < tracks.size(); ++i) {
     const auto& track = tracks[i];
     auto* row = new swui::TrackRow();
     row->setTrack(track, i, [tracks, i]() {
-      switube::YtEngine::getInstance().playQueue(tracks, i);
+      auto& eng = switube::YtEngine::getInstance();
+      eng.playQueueWithMode(tracks, i, eng.isShuffle());
     });
     content->addView(row);
   }
@@ -1230,14 +1271,26 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
   controls->setAlignItems(brls::AlignItems::CENTER);
   controls->setJustifyContent(brls::JustifyContent::CENTER);
 
+  shuffleBtn = swui::makeShuffleButton(
+      [](brls::View*) {
+        switube::YtEngine::getInstance().toggleShuffle();
+        return true;
+      },
+      &shuffleIcon);
+  shuffleBtn->setWidth(52);
+  shuffleBtn->setHeight(46);
+  shuffleBtn->setCornerRadius(23);
+  shuffleBtn->setHighlightCornerRadius(23);
+  shuffleBtn->setMarginRight(12);
+
   prevBtn = swui::makePrevButton([](brls::View*) {
     switube::YtEngine::getInstance().previous();
     return true;
   });
-  prevBtn->setWidth(76);
-  prevBtn->setHeight(52);
-  prevBtn->setCornerRadius(26);
-  prevBtn->setMarginRight(18);
+  prevBtn->setWidth(72);
+  prevBtn->setHeight(50);
+  prevBtn->setCornerRadius(25);
+  prevBtn->setMarginRight(14);
 
   playBtn = swui::makePlayPauseButton(
       [](brls::View*) {
@@ -1245,32 +1298,56 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
         return true;
       },
       &playPauseIcon, true);
-  playBtn->setWidth(96);
+  playBtn->setWidth(92);
   playBtn->setHeight(56);
   playBtn->setCornerRadius(28);
-  playBtn->setMarginRight(18);
+  playBtn->setMarginRight(14);
 
   nextBtn = swui::makeNextButton([](brls::View*) {
     switube::YtEngine::getInstance().next();
     return true;
   });
-  nextBtn->setWidth(76);
-  nextBtn->setHeight(52);
-  nextBtn->setCornerRadius(26);
+  nextBtn->setWidth(72);
+  nextBtn->setHeight(50);
+  nextBtn->setCornerRadius(25);
+  nextBtn->setMarginRight(12);
+
+  repeatBtn = swui::makeRepeatButton(
+      [](brls::View*) {
+        switube::YtEngine::getInstance().cycleRepeatMode();
+        return true;
+      },
+      &repeatIcon);
+  repeatBtn->setWidth(52);
+  repeatBtn->setHeight(46);
+  repeatBtn->setCornerRadius(23);
+  repeatBtn->setHighlightCornerRadius(23);
+
+  controls->addView(shuffleBtn);
+  controls->addView(prevBtn);
+  controls->addView(playBtn);
+  controls->addView(nextBtn);
+  controls->addView(repeatBtn);
+  rightCol->addView(controls);
+
+  auto* actionRow = new brls::Box();
+  actionRow->setAxis(brls::Axis::ROW);
+  actionRow->setAlignItems(brls::AlignItems::CENTER);
+  actionRow->setJustifyContent(brls::JustifyContent::CENTER);
+  actionRow->setMarginTop(14);
 
   favBtn = new brls::Box();
   favBtn->setFocusable(true);
   favBtn->setWidth(64);
-  favBtn->setHeight(52);
-  favBtn->setCornerRadius(26);
-  favBtn->setHighlightCornerRadius(26);
+  favBtn->setHeight(46);
+  favBtn->setCornerRadius(23);
+  favBtn->setHighlightCornerRadius(23);
   favBtn->setBackgroundColor(swui::surfaceRaised());
   favBtn->setAlignItems(brls::AlignItems::CENTER);
   favBtn->setJustifyContent(brls::JustifyContent::CENTER);
-  favBtn->setMarginLeft(18);
   favBtn->addGestureRecognizer(new brls::TapGestureRecognizer(favBtn));
 
-  favBtnLabel = swui::makeLabel("♡", 24, swui::textPrimary(), true);
+  favBtnLabel = swui::makeLabel("♡", 22, swui::textPrimary(), true);
   favBtn->addView(favBtnLabel);
 
   favBtn->registerClickAction([](brls::View*) {
@@ -1285,16 +1362,16 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
   downloadBtn = new brls::Box();
   downloadBtn->setFocusable(true);
   downloadBtn->setWidth(64);
-  downloadBtn->setHeight(52);
-  downloadBtn->setCornerRadius(26);
-  downloadBtn->setHighlightCornerRadius(26);
+  downloadBtn->setHeight(46);
+  downloadBtn->setCornerRadius(23);
+  downloadBtn->setHighlightCornerRadius(23);
   downloadBtn->setBackgroundColor(swui::surfaceRaised());
   downloadBtn->setAlignItems(brls::AlignItems::CENTER);
   downloadBtn->setJustifyContent(brls::JustifyContent::CENTER);
   downloadBtn->setMarginLeft(14);
   downloadBtn->addGestureRecognizer(new brls::TapGestureRecognizer(downloadBtn));
 
-  downloadBadge = new swui::DownloadBadge(30.0f);
+  downloadBadge = new swui::DownloadBadge(28.0f);
   downloadBtn->addView(downloadBadge);
 
   downloadBtn->registerClickAction([this](brls::View*) {
@@ -1306,12 +1383,9 @@ NowPlayingTab::NowPlayingTab() : alive(std::make_shared<std::atomic_bool>(true))
     return true;
   });
 
-  controls->addView(prevBtn);
-  controls->addView(playBtn);
-  controls->addView(nextBtn);
-  controls->addView(favBtn);
-  controls->addView(downloadBtn);
-  rightCol->addView(controls);
+  actionRow->addView(favBtn);
+  actionRow->addView(downloadBtn);
+  rightCol->addView(actionRow);
 
   body->addView(rightCol);
   addView(body);
@@ -1513,6 +1587,23 @@ void NowPlayingTab::refresh() {
   auto& engine = switube::YtEngine::getInstance();
   const auto now = engine.getNowPlaying();
   auto state = engine.getState();
+
+  if (shuffleIcon) {
+    shuffleIcon->setActive(engine.isShuffle());
+  }
+  if (repeatIcon) {
+    switch (engine.getRepeatMode()) {
+      case switube::YtRepeatMode::One:
+        repeatIcon->setMode(swui::RepeatMode::One);
+        break;
+      case switube::YtRepeatMode::All:
+        repeatIcon->setMode(swui::RepeatMode::All);
+        break;
+      default:
+        repeatIcon->setMode(swui::RepeatMode::Off);
+        break;
+    }
+  }
 
   if (!now.id.empty()) {
     contextLabel->setText(tr("now_playing.context_from"));

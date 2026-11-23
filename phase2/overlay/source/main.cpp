@@ -20,9 +20,9 @@
 namespace {
 
 #ifdef Switube_LIGHTWEIGHT_OVERLAY
-constexpr const char* OverlayVersion = "v0.1.0-lite1";
+constexpr const char* OverlayVersion = "v0.2.1-lite1";
 #else
-constexpr const char* OverlayVersion = "v0.1.0";
+constexpr const char* OverlayVersion = "v0.2.1";
 #endif
 
 constexpr uint64_t SwitubeProgramId = UINT64_C(0x4200000000535755);

@@ -26,6 +26,7 @@ namespace {
 
 #ifdef SWITUBE_BACKGROUND_SERVICE
 constexpr size_t AVIO_BUFFER_SIZE = 8 * 1024;
+alignas(0x1000) uint8_t s_audioDecoderStack[128 * 1024];
 #else
 constexpr size_t AVIO_BUFFER_SIZE = 32 * 1024;
 #endif
@@ -155,18 +156,96 @@ YtAudioPlayer::YtAudioPlayer() {
 }
 
 YtAudioPlayer::~YtAudioPlayer() {
-  stop();
+  shutdown();
 }
 
 bool YtAudioPlayer::init() {
+  ensureWorkerStarted();
   return sink_ && sink_->ok();
 }
 
 void YtAudioPlayer::shutdown() {
   stop();
+  stopWorker();
+}
+
+void YtAudioPlayer::ensureWorkerStarted() {
+  std::lock_guard<std::mutex> lock(jobMutex_);
+  if (workerStarted_) return;
+  workerStop_ = false;
+
+#ifdef SWITUBE_BACKGROUND_SERVICE
+  Result rc = threadCreate(
+      &nxWorkerThread_,
+      [](void* arg) {
+        static_cast<YtAudioPlayer*>(arg)->workerLoop();
+      },
+      this,
+      s_audioDecoderStack,
+      sizeof(s_audioDecoderStack),
+      49,
+      3);
+  if (R_SUCCEEDED(rc)) {
+    rc = threadStart(&nxWorkerThread_);
+    if (R_SUCCEEDED(rc)) {
+      workerStarted_ = true;
+      nxlog::push("YtAudioPlayer: persistent decoder thread started (128 KiB static stack)");
+    } else {
+      threadClose(&nxWorkerThread_);
+      nxlog::pushf("YtAudioPlayer: threadStart failed: 0x%08X", rc);
+    }
+  } else {
+    nxlog::pushf("YtAudioPlayer: threadCreate failed: 0x%08X", rc);
+  }
+#else
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setstacksize(&attr, 1024 * 1024);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+  int err = pthread_create(
+      &pthreadWorker_,
+      &attr,
+      [](void* arg) -> void* {
+        static_cast<YtAudioPlayer*>(arg)->workerLoop();
+        return nullptr;
+      },
+      this);
+  pthread_attr_destroy(&attr);
+  if (err == 0) {
+    workerStarted_ = true;
+    nxlog::push("YtAudioPlayer: persistent decoder thread started");
+  } else {
+    nxlog::pushf("YtAudioPlayer: pthread_create failed: %d", err);
+  }
+#endif
+}
+
+void YtAudioPlayer::stopWorker() {
+  bool wasStarted = false;
+  {
+    std::lock_guard<std::mutex> lock(jobMutex_);
+    if (!workerStarted_) return;
+    workerStop_ = true;
+    hasPendingJob_ = false;
+    wasStarted = true;
+  }
+  jobCv_.notify_all();
+
+  if (wasStarted) {
+#ifdef SWITUBE_BACKGROUND_SERVICE
+    threadWaitForExit(&nxWorkerThread_);
+    threadClose(&nxWorkerThread_);
+#else
+    pthread_join(pthreadWorker_, nullptr);
+#endif
+    std::lock_guard<std::mutex> lock(jobMutex_);
+    workerStarted_ = false;
+  }
 }
 
 void YtAudioPlayer::play(const std::string& streamUrl, uint32_t durationMs, uint64_t contentLength) {
+  ensureWorkerStarted();
+
   uint64_t gen = 0;
   std::shared_ptr<std::atomic<bool>> newToken;
 
@@ -183,6 +262,7 @@ void YtAudioPlayer::play(const std::string& streamUrl, uint32_t durationMs, uint
     isPlaying_ = true;
     currentPositionMs_ = 0;
     durationMs_ = durationMs;
+    seekTargetMs_.store(-1);
     gen = ++currentGeneration_;
   }
 
@@ -191,17 +271,15 @@ void YtAudioPlayer::play(const std::string& streamUrl, uint32_t durationMs, uint
     sink_->flush();
   }
 
-  nxlog::pushf("YtAudioPlayer: starting playback (gen %llu, bytes: %llu)...",
+  nxlog::pushf("YtAudioPlayer: queueing playback (gen %llu, bytes: %llu)...",
                static_cast<unsigned long long>(gen), static_cast<unsigned long long>(contentLength));
 
-#ifdef SWITUBE_BACKGROUND_SERVICE
-  constexpr size_t kDecoderStackSize = 128 * 1024;
-#else
-  constexpr size_t kDecoderStackSize = 1024 * 1024;
-#endif
-  launchWorkerWithStack([this, streamUrl, durationMs, contentLength, gen, newToken]() {
-    audioWorker(streamUrl, durationMs, contentLength, gen, newToken);
-  }, kDecoderStackSize);
+  {
+    std::lock_guard<std::mutex> lock(jobMutex_);
+    pendingJob_ = PlayJob{streamUrl, durationMs, contentLength, gen, newToken};
+    hasPendingJob_ = true;
+  }
+  jobCv_.notify_one();
 }
 
 void YtAudioPlayer::pause() {
@@ -243,11 +321,45 @@ void YtAudioPlayer::setVolume(float volume) {
   }
 }
 
-void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t contentLength, uint64_t generation,
-                                std::shared_ptr<std::atomic<bool>> stopToken) {
-  std::lock_guard<std::mutex> workerLock(workerMutex_);
+void YtAudioPlayer::workerLoop() {
+  constexpr int MAX_OUT_SAMPLES = 8192;
+  std::vector<uint8_t> pcmOut(MAX_OUT_SAMPLES * 2 * sizeof(int16_t));
+
+  while (true) {
+    PlayJob job;
+    {
+      std::unique_lock<std::mutex> lock(jobMutex_);
+      jobCv_.wait(lock, [this]() { return workerStop_ || hasPendingJob_; });
+      if (workerStop_) break;
+      job = std::move(pendingJob_);
+      hasPendingJob_ = false;
+    }
+
+    if (!job.stopToken || job.stopToken->load() || job.generation != currentGeneration_.load()) {
+      continue;
+    }
+
+    bool shouldAdvance = runDecodeSession(job, pcmOut);
+    if (shouldAdvance && !job.stopToken->load() && job.generation == currentGeneration_.load()) {
+      std::function<void()> cb;
+      {
+        std::lock_guard<std::mutex> lock(controlMutex_);
+        cb = onComplete_;
+      }
+      if (cb) cb();
+    }
+  }
+}
+
+bool YtAudioPlayer::runDecodeSession(const PlayJob& job, std::vector<uint8_t>& pcmOut) {
+  const std::string& url = job.url;
+  uint32_t durMs = job.durationMs;
+  uint64_t contentLength = job.contentLength;
+  uint64_t generation = job.generation;
+  const auto& stopToken = job.stopToken;
+
   if (stopToken->load() || generation != currentGeneration_.load()) {
-    return;
+    return false;
   }
 
   bool isLocal = (url.rfind("/", 0) == 0 || url.rfind("sdmc:/", 0) == 0);
@@ -265,7 +377,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
     }
     if (!fp) {
       nxlog::pushf("YtAudioPlayer error: cannot open local file: %s", url.c_str());
-      return;
+      return false;
     }
     fseek(fp, 0, SEEK_END);
     long fsize = ftell(fp);
@@ -273,7 +385,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
     if (fsize <= 0) {
       fclose(fp);
       nxlog::pushf("YtAudioPlayer error: empty local file: %s", url.c_str());
-      return;
+      return false;
     }
 #ifdef SWITUBE_BACKGROUND_SERVICE
     reader->localFp = fp;
@@ -285,7 +397,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
     fclose(fp);
     if (readBytes == 0) {
       nxlog::pushf("YtAudioPlayer error: fread failed on local file: %s", url.c_str());
-      return;
+      return false;
     }
     reader->buffer.resize(readBytes);
     reader->isDownloading = false;
@@ -418,21 +530,21 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
-  if (stopToken->load()) return;
+  if (stopToken->load()) return false;
   }
 
-  if (stopToken->load()) return;
+  if (stopToken->load()) return false;
 
   uint8_t* avioBuffer = static_cast<uint8_t*>(av_malloc(AVIO_BUFFER_SIZE));
   if (!avioBuffer) {
     nxlog::push("YtAudioPlayer error: av_malloc(AVIO_BUFFER_SIZE) failed");
-    return;
+    return false;
   }
   avioCtx = avio_alloc_context(avioBuffer, AVIO_BUFFER_SIZE, 0, reader.get(), AvioRead, nullptr, AvioSeek);
   if (!avioCtx) {
     av_free(avioBuffer);
     nxlog::push("YtAudioPlayer error: avio_alloc_context failed");
-    return;
+    return false;
   }
 
   fmtCtx = avformat_alloc_context();
@@ -440,7 +552,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
     if (avioCtx->buffer) av_freep(&avioCtx->buffer);
     avio_context_free(&avioCtx);
     nxlog::push("YtAudioPlayer error: avformat_alloc_context failed");
-    return;
+    return false;
   }
   fmtCtx->pb = avioCtx;
   fmtCtx->flags |= AVFMT_FLAG_CUSTOM_IO;
@@ -455,7 +567,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
       if (avioCtx->buffer) av_freep(&avioCtx->buffer);
       avio_context_free(&avioCtx);
     }
-    return;
+    return false;
   }
 
   if (stopToken->load() || generation != currentGeneration_.load()) {
@@ -467,7 +579,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
       if (avioCtx->buffer) av_freep(&avioCtx->buffer);
       avio_context_free(&avioCtx);
     }
-    return;
+    return false;
   }
 
   if (avformat_find_stream_info(fmtCtx, nullptr) < 0) {
@@ -480,7 +592,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
       if (avioCtx->buffer) av_freep(&avioCtx->buffer);
       avio_context_free(&avioCtx);
     }
-    return;
+    return false;
   }
 
   const AVCodec* codec = nullptr;
@@ -495,7 +607,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
       if (avioCtx->buffer) av_freep(&avioCtx->buffer);
       avio_context_free(&avioCtx);
     }
-    return;
+    return false;
   }
 
   AVCodecContext* codecCtx = avcodec_alloc_context3(codec);
@@ -509,7 +621,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
       if (avioCtx->buffer) av_freep(&avioCtx->buffer);
       avio_context_free(&avioCtx);
     }
-    return;
+    return false;
   }
   if (avcodec_parameters_to_context(codecCtx, fmtCtx->streams[streamIdx]->codecpar) < 0 ||
       avcodec_open2(codecCtx, codec, nullptr) < 0) {
@@ -523,7 +635,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
       if (avioCtx->buffer) av_freep(&avioCtx->buffer);
       avio_context_free(&avioCtx);
     }
-    return;
+    return false;
   }
 
   // Configurar SwrContext para remuestrear a 48000 Hz, S16 estéreo
@@ -557,7 +669,7 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
       if (avioCtx->buffer) av_freep(&avioCtx->buffer);
       avio_context_free(&avioCtx);
     }
-    return;
+    return false;
   }
 
   AVPacket* pkt = av_packet_alloc();
@@ -576,12 +688,14 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
       if (avioCtx->buffer) av_freep(&avioCtx->buffer);
       avio_context_free(&avioCtx);
     }
-    return;
+    return false;
   }
   AVRational tb = fmtCtx->streams[streamIdx]->time_base;
 
   constexpr int MAX_OUT_SAMPLES = 8192;
-  std::vector<uint8_t> pcmOut(MAX_OUT_SAMPLES * 2 * sizeof(int16_t));
+  if (pcmOut.size() < static_cast<size_t>(MAX_OUT_SAMPLES * 2 * sizeof(int16_t))) {
+    pcmOut.resize(MAX_OUT_SAMPLES * 2 * sizeof(int16_t));
+  }
 
   nxlog::pushf("YtAudioPlayer: audio decoding started (%d Hz -> 48000 Hz, codec: %s)",
                codecCtx->sample_rate, codec->name);
@@ -679,18 +793,15 @@ void YtAudioPlayer::audioWorker(std::string url, uint32_t durMs, uint64_t conten
   nxlog::pushf("YtAudioPlayer: playback loop ended (completed: %s, stopped: %s)",
                completed ? "YES" : "NO", stopToken->load() ? "YES" : "NO");
 
-  bool isActualEnd = (durMs == 0 || currentPositionMs_.load() >= static_cast<uint32_t>(durMs * 0.80f));
+  bool isActualEnd = (isLocal || durMs == 0 || currentPositionMs_.load() >= static_cast<uint32_t>(durMs * 0.80f));
   if (completed && isActualEnd && !stopToken->load() && generation == currentGeneration_.load()) {
-    std::function<void()> cb;
-    {
-      std::lock_guard<std::mutex> lock(controlMutex_);
-      cb = onComplete_;
-    }
-    if (cb) cb();
-  } else if (!isActualEnd && completed) {
+    return true;
+  }
+  if (!isActualEnd && completed) {
     nxlog::pushf("YtAudioPlayer: playback ended prematurely at %u ms (expected %u ms), not auto-advancing",
                  currentPositionMs_.load(), durMs);
   }
+  return false;
 }
 
 } // namespace switube

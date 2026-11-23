@@ -40,6 +40,7 @@ const std::unordered_map<std::string, std::pair<const char*, const char*>> kTran
     {"downloads.empty_title", {"No tienes canciones descargadas", "No downloaded songs"}},
     {"downloads.empty_desc", {"Toca el icono de descarga (⬇) o pulsa (X) en cualquier canción para escucharla sin conexión.", "Tap the download icon (⬇) or press (X) on any song to listen offline."}},
     {"downloads.play_all", {"Reproducir todo", "Play All"}},
+    {"downloads.play_shuffle", {"Aleatorio", "Shuffle"}},
 
     // Home Tab
     {"home.title", {"YouTube Music", "YouTube Music"}},
@@ -78,6 +79,8 @@ const std::unordered_map<std::string, std::pair<const char*, const char*>> kTran
     {"library.syncing", {"Sincronizando con tu cuenta de YouTube Music...", "Syncing with your YouTube Music account..."}},
     {"library.playlists_empty_title", {"Sin listas sincronizadas", "No synced playlists"}},
     {"library.playlists_empty_desc", {"Vincula tu cuenta de YouTube en Ajustes para ver tus listas de reproducción y álbumes guardados.", "Link your YouTube account in Settings to see your saved playlists and albums."}},
+    {"library.play_order", {"En orden", "In order"}},
+    {"library.play_shuffle", {"Aleatorio", "Shuffle"}},
 
     // Now Playing Tab
     {"now_playing.title", {"En reproducción", "Now Playing"}},
@@ -92,6 +95,8 @@ const std::unordered_map<std::string, std::pair<const char*, const char*>> kTran
     {"now_playing.seek_fwd", {"Avanzar 10s", "Forward 10s"}},
     {"now_playing.vol_down", {"Bajar volumen", "Volume down"}},
     {"now_playing.vol_up", {"Subir volumen", "Volume up"}},
+    {"now_playing.shuffle", {"Aleatorio", "Shuffle"}},
+    {"now_playing.repeat", {"Repetir", "Repeat"}},
 
     // Artist View
     {"artist.artist", {"Artista", "Artist"}},
@@ -110,6 +115,7 @@ const std::unordered_map<std::string, std::pair<const char*, const char*>> kTran
     {"tracklist.loading_panel_title", {"Cargando pistas", "Loading tracks"}},
     {"tracklist.loading_panel_desc", {"Obteniendo canciones de YouTube Music...", "Fetching songs from YouTube Music..."}},
     {"tracklist.play_all", {"Reproducir todo", "Play all"}},
+    {"tracklist.play_shuffle", {"Aleatorio", "Shuffle"}},
     {"tracklist.songs_count", {"{} canciones", "{} songs"}},
     {"tracklist.empty_title", {"Sin canciones", "No songs"}},
     {"tracklist.empty_desc", {"No se pudieron encontrar canciones reproducibles en este álbum o lista.", "No playable tracks found in this album or playlist."}},
@@ -135,7 +141,7 @@ const std::unordered_map<std::string, std::pair<const char*, const char*>> kTran
     {"settings.language_desc", {"Selecciona el idioma preferido para la interfaz y recomendaciones", "Select preferred language for interface and recommendations"}},
     {"settings.lang_es", {"Español", "Spanish"}},
     {"settings.lang_en", {"English", "English"}},
-    {"settings.about_title", {"Switube v0.2.0", "Switube v0.2.0"}},
+    {"settings.about_title", {"Switube v0.2.1", "Switube v0.2.1"}},
     {"settings.about_desc", {
         "Cliente nativo de YouTube Music para Nintendo Switch.\n"
         "Soporte nativo para carruseles, búsquedas, perfiles de artista, descargas offline y audio Opus 48 kHz.\n"

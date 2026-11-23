@@ -20,6 +20,12 @@ enum class PlaybackState {
   Error
 };
 
+enum class YtRepeatMode {
+  Off = 0,
+  One = 1,
+  All = 2
+};
+
 struct NowPlayingInfo {
   std::string id;
   std::string title;
@@ -44,11 +50,19 @@ class YtEngine {
   // Control de reproducción
   void playTrack(const YtTrack& track);
   void playQueue(const std::vector<YtTrack>& tracks, size_t startIndex = 0);
+  void playQueueWithMode(const std::vector<YtTrack>& tracks, size_t startIndex, bool shuffled);
+  void playQueueShuffled(const std::vector<YtTrack>& tracks);
   void playPause();
   void next();
   void previous();
   void seekTo(uint32_t positionMs);
   void setVolume(float volume);
+  void setShuffle(bool enabled);
+  void toggleShuffle();
+  bool isShuffle() const { return shuffle_.load(); }
+  void setRepeatMode(YtRepeatMode mode);
+  void cycleRepeatMode();
+  YtRepeatMode getRepeatMode() const { return repeatMode_.load(); }
   void onTrackDeleted(const std::string& trackId);
 
   // Favoritos y Biblioteca sincronizada
@@ -83,6 +97,7 @@ class YtEngine {
   ~YtEngine();
 
   void notifyObservers();
+  void playQueueIndex(size_t index);
   void playbackThreadLoop();
   void loadFavorites();
   void saveFavorites();
@@ -92,8 +107,11 @@ class YtEngine {
   YtMusicClient client_;
   PlaybackState state_ = PlaybackState::Stopped;
   NowPlayingInfo nowPlaying_;
+  std::vector<YtTrack> originalQueue_;
   std::vector<YtTrack> queue_;
   size_t currentQueueIndex_ = 0;
+  std::atomic<bool> shuffle_{false};
+  std::atomic<YtRepeatMode> repeatMode_{YtRepeatMode::All};
   std::vector<YtTrack> favorites_;
   std::vector<YtTrack> userPlaylists_;
   std::string likedContinuationToken_;

@@ -181,7 +181,8 @@ void ArtistActivity::renderArtist(const switube::YtArtistPage& page) {
       const auto& track = artistPage.topSongs[i];
       auto* row = new swui::TrackRow();
       row->setTrack(track, i, [this, i]() {
-        switube::YtEngine::getInstance().playQueue(artistPage.topSongs, i);
+        auto& eng = switube::YtEngine::getInstance();
+        eng.playQueueWithMode(artistPage.topSongs, i, eng.isShuffle());
       });
       content->addView(row);
     }

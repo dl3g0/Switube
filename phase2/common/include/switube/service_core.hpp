@@ -39,6 +39,8 @@ class ServiceCore {
   void publishVolume(uint32_t volumePermille, uint64_t monotonicMs);
   void publishConnection(bool connected, uint64_t monotonicMs);
   void publishSeekable(bool seekable, uint64_t monotonicMs);
+  void publishPlaybackModes(bool shuffle, SwitubeRepeatMode repeatMode,
+                            uint64_t monotonicMs);
   void publishResult(SwitubeControlResult result, uint64_t monotonicMs);
   uint64_t beginBrowse(std::string_view title, std::string_view subtitle,
                        uint32_t depth, uint64_t monotonicMs);

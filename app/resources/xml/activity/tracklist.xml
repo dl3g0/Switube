@@ -53,24 +53,48 @@
                     text="" />
 
                 <brls:Box
-                    id="playAll"
                     axis="row"
                     alignItems="center"
-                    justifyContent="center"
-                    width="142"
-                    paddingTop="10"
-                    paddingRight="18"
-                    paddingBottom="10"
-                    paddingLeft="18"
-                    marginTop="16"
-                    cornerRadius="9"
-                    highlightCornerRadius="9"
-                    backgroundColor="#1F232A">
-                    <brls:Label
-                        id="playAllLabel"
-                        fontSize="18"
-                        singleLine="true"
-                        text="Loading" />
+                    marginTop="16">
+                    <brls:Box
+                        id="playAll"
+                        axis="row"
+                        alignItems="center"
+                        justifyContent="center"
+                        width="186"
+                        paddingTop="10"
+                        paddingRight="18"
+                        paddingBottom="10"
+                        paddingLeft="18"
+                        marginRight="12"
+                        cornerRadius="9"
+                        highlightCornerRadius="9"
+                        backgroundColor="#1F232A">
+                        <brls:Label
+                            id="playAllLabel"
+                            fontSize="18"
+                            singleLine="true"
+                            text="Loading" />
+                    </brls:Box>
+                    <brls:Box
+                        id="playShuffle"
+                        axis="row"
+                        alignItems="center"
+                        justifyContent="center"
+                        width="136"
+                        paddingTop="10"
+                        paddingRight="18"
+                        paddingBottom="10"
+                        paddingLeft="18"
+                        cornerRadius="9"
+                        highlightCornerRadius="9"
+                        backgroundColor="#1F232A">
+                        <brls:Label
+                            id="playShuffleLabel"
+                            fontSize="18"
+                            singleLine="true"
+                            text="Shuffle" />
+                    </brls:Box>
                 </brls:Box>
 
             </brls:Box>

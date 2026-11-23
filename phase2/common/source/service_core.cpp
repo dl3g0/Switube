@@ -131,6 +131,15 @@ void ServiceCore::publishSeekable(bool seekable, uint64_t monotonicMs) {
   changedLocked(monotonicMs);
 }
 
+void ServiceCore::publishPlaybackModes(bool shuffle, SwitubeRepeatMode repeatMode,
+                                       uint64_t monotonicMs) {
+  std::scoped_lock lock(mutex);
+  setFlagLocked(SwitubeStatusFlag_Shuffle, shuffle);
+  setFlagLocked(SwitubeStatusFlag_RepeatOne, repeatMode == SwitubeRepeatMode_One);
+  setFlagLocked(SwitubeStatusFlag_RepeatAll, repeatMode == SwitubeRepeatMode_All);
+  changedLocked(monotonicMs);
+}
+
 void ServiceCore::publishResult(SwitubeControlResult result,
                                 uint64_t monotonicMs) {
   std::scoped_lock lock(mutex);

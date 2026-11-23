@@ -17,7 +17,7 @@ endif ()
 
 set(VERSION_MAJOR "0")
 set(VERSION_MINOR "2")
-set(VERSION_ALTER "0")
+set(VERSION_ALTER "1")
 set(PROJECT_AUTHOR "Switube Team")
 set(PROJECT_TITLEID "010ff000ffff0120")
 set(PACKAGE_NAME "app.switube")

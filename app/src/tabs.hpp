@@ -157,10 +157,14 @@ class NowPlayingTab : public brls::Box {
   brls::Label* remainingLabel = nullptr;
   MusicProgressBar* progressBar = nullptr;
 
+  brls::Box* shuffleBtn = nullptr;
+  swui::ShuffleIcon* shuffleIcon = nullptr;
   brls::Box* playBtn = nullptr;
   swui::PlayPauseIcon* playPauseIcon = nullptr;
   brls::Box* prevBtn = nullptr;
   brls::Box* nextBtn = nullptr;
+  brls::Box* repeatBtn = nullptr;
+  swui::RepeatIcon* repeatIcon = nullptr;
   brls::Box* favBtn = nullptr;
   brls::Label* favBtnLabel = nullptr;
   brls::Box* downloadBtn = nullptr;

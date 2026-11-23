@@ -4,6 +4,7 @@
 #include <fstream>
 #include <thread>
 #include <algorithm>
+#include <random>
 #include <sys/stat.h>
 #include <nlohmann/json.hpp>
 
@@ -62,6 +63,32 @@ bool YtEngine::init() {
 
   YtAudioPlayer::getInstance().init();
   YtAudioPlayer::getInstance().setCompletionCallback([this]() {
+    YtRepeatMode mode = repeatMode_.load();
+    if (mode == YtRepeatMode::One) {
+      size_t idx = 0;
+      {
+        std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+        if (queue_.empty()) return;
+        idx = currentQueueIndex_;
+      }
+      playQueueIndex(idx);
+      return;
+    }
+    if (mode == YtRepeatMode::Off) {
+      bool atEnd = false;
+      {
+        std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+        atEnd = queue_.empty() || (currentQueueIndex_ + 1 >= queue_.size());
+        if (atEnd) {
+          state_ = PlaybackState::Stopped;
+          nowPlaying_.positionMs = 0;
+        }
+      }
+      if (atEnd) {
+        notifyObservers();
+        return;
+      }
+    }
     next();
   });
 
@@ -170,17 +197,53 @@ void YtEngine::playTrack(const YtTrack& track) {
 }
 
 void YtEngine::playQueue(const std::vector<YtTrack>& tracks, size_t startIndex) {
+  playQueueWithMode(tracks, startIndex, false);
+}
+
+void YtEngine::playQueueShuffled(const std::vector<YtTrack>& tracks) {
+  if (tracks.empty()) return;
+  playQueueWithMode(tracks, 0, true);
+}
+
+void YtEngine::playQueueWithMode(const std::vector<YtTrack>& tracks, size_t startIndex, bool shuffled) {
   if (tracks.empty() || startIndex >= tracks.size()) return;
 
+  {
+    std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+    originalQueue_ = tracks;
+    shuffle_.store(shuffled);
+    if (shuffled) {
+      queue_ = tracks;
+      std::mt19937 rng(static_cast<uint32_t>(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+      if (startIndex > 0) {
+        // Poner la pista seleccionada primero y mezclar el resto
+        std::swap(queue_[0], queue_[startIndex]);
+        if (queue_.size() > 2) {
+          std::shuffle(queue_.begin() + 1, queue_.end(), rng);
+        }
+      } else {
+        std::shuffle(queue_.begin(), queue_.end(), rng);
+      }
+      startIndex = 0;
+    } else {
+      queue_ = tracks;
+    }
+  }
+  playQueueIndex(startIndex);
+}
+
+void YtEngine::playQueueIndex(size_t startIndex) {
+  std::string trackId;
+  uint32_t dur = 0;
   uint64_t requestGen = ++playRequestGen_;
 
   // Detener inmediatamente la pista anterior para que no continúe sonando ni reporte posición
   YtAudioPlayer::getInstance().stop();
 
-  std::string trackId;
   {
     std::lock_guard<std::recursive_mutex> lock(dataMutex_);
-    queue_ = tracks;
+    if (queue_.empty() || startIndex >= queue_.size()) return;
     currentQueueIndex_ = startIndex;
     const auto& current = queue_[currentQueueIndex_];
 
@@ -194,6 +257,7 @@ void YtEngine::playQueue(const std::vector<YtTrack>& tracks, size_t startIndex) 
     nowPlaying_.durationMs = current.durationMs;
     nowPlaying_.positionMs = 0;
     nowPlaying_.isFavorite = isFavorite(current.id);
+    dur = nowPlaying_.durationMs;
 
     state_ = PlaybackState::Loading;
     positionMeasuredAt_ = std::chrono::steady_clock::now();
@@ -204,11 +268,6 @@ void YtEngine::playQueue(const std::vector<YtTrack>& tracks, size_t startIndex) 
   std::string localPath = findLocalAudioTrack(trackId);
   if (!localPath.empty()) {
     nxlog::pushf("playQueue: playing local downloaded track '%s' (%s)", trackId.c_str(), localPath.c_str());
-    uint32_t dur = 0;
-    {
-      std::lock_guard<std::recursive_mutex> lock(dataMutex_);
-      dur = nowPlaying_.durationMs;
-    }
     YtAudioPlayer::getInstance().play(localPath, dur, 0);
     return;
   }
@@ -293,27 +352,76 @@ void YtEngine::playPause() {
 }
 
 void YtEngine::next() {
-  std::vector<YtTrack> q;
   size_t nextIdx = 0;
   {
     std::lock_guard<std::recursive_mutex> lock(dataMutex_);
     if (queue_.empty()) return;
     nextIdx = (currentQueueIndex_ + 1) % queue_.size();
-    q = queue_;
   }
-  playQueue(q, nextIdx);
+  playQueueIndex(nextIdx);
 }
 
 void YtEngine::previous() {
-  std::vector<YtTrack> q;
   size_t prevIdx = 0;
   {
     std::lock_guard<std::recursive_mutex> lock(dataMutex_);
     if (queue_.empty()) return;
     prevIdx = (currentQueueIndex_ == 0) ? queue_.size() - 1 : currentQueueIndex_ - 1;
-    q = queue_;
   }
-  playQueue(q, prevIdx);
+  playQueueIndex(prevIdx);
+}
+
+void YtEngine::setShuffle(bool enabled) {
+  {
+    std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+    if (shuffle_.load() == enabled) return;
+    shuffle_.store(enabled);
+    if (!queue_.empty()) {
+      std::string currentId = nowPlaying_.id;
+      if (enabled) {
+        if (originalQueue_.empty()) originalQueue_ = queue_;
+        // Mantener la pista actual en índice 0 y mezclar el resto
+        if (currentQueueIndex_ < queue_.size()) {
+          std::swap(queue_[0], queue_[currentQueueIndex_]);
+        }
+        if (queue_.size() > 2) {
+          std::mt19937 rng(static_cast<uint32_t>(
+              std::chrono::steady_clock::now().time_since_epoch().count()));
+          std::shuffle(queue_.begin() + 1, queue_.end(), rng);
+        }
+        currentQueueIndex_ = 0;
+      } else if (!originalQueue_.empty()) {
+        queue_ = originalQueue_;
+        currentQueueIndex_ = 0;
+        for (size_t i = 0; i < queue_.size(); ++i) {
+          if (queue_[i].id == currentId) {
+            currentQueueIndex_ = i;
+            break;
+          }
+        }
+      }
+    }
+  }
+  notifyObservers();
+}
+
+void YtEngine::toggleShuffle() {
+  setShuffle(!shuffle_.load());
+}
+
+void YtEngine::setRepeatMode(YtRepeatMode mode) {
+  if (repeatMode_.exchange(mode) != mode) {
+    notifyObservers();
+  }
+}
+
+void YtEngine::cycleRepeatMode() {
+  YtRepeatMode cur = repeatMode_.load();
+  YtRepeatMode nextMode = YtRepeatMode::All;
+  if (cur == YtRepeatMode::Off) nextMode = YtRepeatMode::All;
+  else if (cur == YtRepeatMode::All) nextMode = YtRepeatMode::One;
+  else nextMode = YtRepeatMode::Off;
+  setRepeatMode(nextMode);
 }
 
 void YtEngine::seekTo(uint32_t positionMs) {
@@ -353,6 +461,10 @@ void YtEngine::onTrackDeleted(const std::string& trackId) {
   bool notify = false;
   {
     std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+    originalQueue_.erase(
+        std::remove_if(originalQueue_.begin(), originalQueue_.end(),
+                       [&trackId](const YtTrack& t) { return t.id == trackId; }),
+        originalQueue_.end());
     for (size_t i = 0; i < queue_.size();) {
       if (queue_[i].id == trackId) {
         queue_.erase(queue_.begin() + i);

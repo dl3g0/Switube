@@ -172,6 +172,10 @@ void BackgroundBackend::publishSnapshot() {
 
   core.publishPlaybackState(switubeState, playing.positionMs, playing.durationMs, now);
   core.publishVolume(static_cast<uint32_t>(playing.volume * 1000.0f), now);
+  core.publishPlaybackModes(
+      engine.isShuffle(),
+      static_cast<SwitubeRepeatMode>(engine.getRepeatMode()),
+      now);
 
   const auto queue = engine.getQueue();
   size_t currentIdx = 0;
@@ -228,6 +232,16 @@ void BackgroundBackend::process(const ControlMessage& message) {
     case SwitubeIpcCommand_Seek:
       engine.seekTo(message.value);
       break;
+    case SwitubeIpcCommand_SetShuffle:
+      engine.setShuffle(message.value != 0);
+      break;
+    case SwitubeIpcCommand_SetRepeatMode: {
+      YtRepeatMode mode = YtRepeatMode::Off;
+      if (message.value == SwitubeRepeatMode_One) mode = YtRepeatMode::One;
+      else if (message.value == SwitubeRepeatMode_All) mode = YtRepeatMode::All;
+      engine.setRepeatMode(mode);
+      break;
+    }
     default:
       processBrowse(message);
       break;
@@ -300,6 +314,15 @@ void BackgroundBackend::requestLibrary() {
     page.title = "Descargas";
     page.subtitle = std::to_string(downloads.size()) + " canciones";
     page.depth = 0;
+
+    if (!downloads.empty()) {
+      BrowseEntry shuffleEntry{};
+      shuffleEntry.type = BrowseEntryType::Track;
+      shuffleEntry.name = "Reproducir aleatorio";
+      shuffleEntry.subtitle = std::to_string(downloads.size()) + " canciones";
+      shuffleEntry.track.id = "__SHUFFLE_ALL__";
+      page.entries.push_back(shuffleEntry);
+    }
 
     for (const auto& trk : downloads) {
       BrowseEntry entry{};
@@ -438,16 +461,22 @@ void BackgroundBackend::playBrowseItem(uint64_t generation, uint32_t index) {
 
   const auto& selected = currentPage.entries[index];
   if (selected.type == BrowseEntryType::Track) {
+    bool shuffleAll = (selected.track.id == "__SHUFFLE_ALL__");
     std::vector<YtTrack> tracks;
     size_t playIndex = 0;
     for (size_t i = 0; i < currentPage.entries.size(); ++i) {
-      if (currentPage.entries[i].type == BrowseEntryType::Track) {
-        if (i == index) playIndex = tracks.size();
+      if (currentPage.entries[i].type == BrowseEntryType::Track &&
+          currentPage.entries[i].track.id != "__SHUFFLE_ALL__") {
+        if (!shuffleAll && i == index) playIndex = tracks.size();
         tracks.push_back(currentPage.entries[i].track);
       }
     }
     if (!tracks.empty()) {
-      engine.playQueue(tracks, playIndex);
+      if (shuffleAll) {
+        engine.playQueueShuffled(tracks);
+      } else {
+        engine.playQueueWithMode(tracks, playIndex, engine.isShuffle());
+      }
     }
   }
 }

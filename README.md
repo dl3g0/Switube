@@ -52,17 +52,18 @@ Switube está compuesto por dos módulos diseñados para funcionar tanto de form
 - **Descargas Offline Nativas (`.opus`):**
   - Descarga cualquier canción o video con un solo botón para escucharla **sin conexión a Internet**.
   - Las pistas se almacenan en `/config/Switube/downloads/` junto con su índice de metadatos (`downloads.json`), listas para reproducirse al instante tanto en la app como desde el overlay.
-- **Interfaz Obsidiana/Carmesí y MiniPlayer Flotante:**
-  - Barra lateral translúcida redondeada, *MiniPlayer* flotante tipo cristal con barra de progreso en vivo, y vista *En Reproducción* en card flotante con carátula HD ambiental y botón de *Me gusta* (`♥`/`♡`).
+- **Interfaz Obsidiana/Carmesí, Reproducción Dual y MiniPlayer Flotante:**
+  - Barra lateral translúcida redondeada, *MiniPlayer* flotante tipo cristal con barra de progreso en vivo, y vista *En Reproducción* en card flotante con carátula HD ambiental, botón de *Me gusta* (`♥`/`♡`) y controles de **Aleatorio** y **Repetir** (`Off` / `Una` / `Todas`).
+  - Botones duales **En orden** / **Aleatorio** en playlists, álbumes, favoritos y descargas.
 - **Auto-Actualizador Integrado:** Comprueba nuevas versiones en GitHub Releases al iniciar o desde *Ajustes*, consulta el historial de cambios y descarga/instala el paquete `Switube-Complete-SD.zip` directamente desde la consola.
 - **Multilenguaje Automático:** Detección automática del idioma del sistema de la consola (**Español** / **Inglés**) con selector en vivo desde *Ajustes*.
 
 ### 🎮 Overlay y Motor en Segundo Plano (`Switube.ovl` + `exefs.nsp`)
 - **Música Mientras Juegas (Solo Descargas Offline):** Reproduce **exclusivamente tus canciones descargadas** en segundo plano sin salir de tu partida (sin streaming en línea para mantener el uso de System RAM al mínimo y total estabilidad con los juegos).
-- **Huella de Memoria Optimizada (~4 MB en RAM):** El sysmodule (`0x4200000000535755`) utiliza un compilado a medida de **FFmpeg** (únicamente demuxers `matroska/webm`, `mov/mp4`, `ogg` y decodificadores `opus` y `aac`) y adquiere `audout` bajo demanda solo cuando hay audio activo.
+- **Huella de Memoria Optimizada (~4 MB en RAM) y Sesión Continua:** El sysmodule (`0x4200000000535755`) utiliza un compilado a medida de **FFmpeg** (únicamente demuxers `matroska/webm`, `mov/mp4`, `ogg` y decodificadores `opus` y `aac`), un **hilo decodificador persistente** con pila estática para evitar fragmentación de memoria tras múltiples canciones, y adquiere `audout` bajo demanda solo cuando hay audio activo.
 - **Navegación Completa en el Overlay:**
   - **En Reproducción:** Tarjeta interactiva con barra de progreso, controles de transporte (**Repetir**, **Anterior**, **Play/Pausa**, **Siguiente**, **Aleatorio**) y deslizador de volumen.
-  - **Canciones Descargadas:** Acceso instantáneo y filtro de búsqueda por nombre o artista sobre todas las pistas descargadas desde la app principal.
+  - **Canciones Descargadas:** Acceso directo **`Reproducir aleatorio`**, reproducción en orden desde cualquier pista y filtro de búsqueda por nombre o artista sobre todas las pistas descargadas desde la app principal.
 
 ---
 
@@ -115,7 +116,7 @@ Switube está compuesto por dos módulos diseñados para funcionar tanto de form
 | **◀ / ▶ + A** *(en Transporte)* | Seleccionar y activar **Repetir**, **Anterior**, **Play/Pausa**, **Siguiente** o **Aleatorio** |
 | **◀ / ▶** *(en Volumen)* | Bajar / Subir volumen de **5% en 5%** (admite mantener presionado) |
 | **L / R** | Atajo directo a Canción Anterior / Siguiente |
-| **X / Y** | Atajo directo a Modo Aleatorio (`X`) y Repetir (`Y`) |
+| **X / Y** | Atajo directo a Repetir (`X`) y Modo Aleatorio (`Y`) |
 | **Pantalla Táctil** | Toque directo sobre los 5 botones de transporte, barra de tiempo o barra de volumen |
 
 ---
@@ -167,7 +168,7 @@ Sigue estos pasos para escuchar música mientras juegas cualquier título en tu 
 4. **Inicia la música desde tu juego:**
    - Abre tu juego favorito (o quédate en el menú HOME).
    - Abre **Ultrahand** con **`L + D-Pad Abajo + R3`** y selecciona **Switube**.
-   - Entra a **Canciones descargadas** (puedes filtrar por nombre o artista) y pulsa **`A`** para reproducir.
+   - Entra a **Canciones descargadas** (puedes filtrar por nombre o artista) y elige **`Reproducir aleatorio`** al inicio de la lista o pulsa **`A`** sobre una pista para reproducir en orden (y alterna entre **Aleatorio (`Y`)** o **Repetir (`X`)** cuando quieras desde *En reproducción*).
    - Cierra el overlay con **`B`**: la música seguirá sonando en segundo plano mientras juegas y podrás volver a abrirlo en cualquier momento para pausar, cambiar de canción o ajustar el volumen.
 
 ### 🔄 Cómo reactivar el servicio si aparece inactivo

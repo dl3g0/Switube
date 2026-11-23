@@ -34,5 +34,7 @@ class TrackListActivity : public brls::Activity {
   BRLS_BIND(brls::Label, description, "description");
   BRLS_BIND(brls::Box, playAll, "playAll");
   BRLS_BIND(brls::Label, playAllLabel, "playAllLabel");
+  BRLS_BIND(brls::Box, playShuffle, "playShuffle");
+  BRLS_BIND(brls::Label, playShuffleLabel, "playShuffleLabel");
   BRLS_BIND(brls::Box, list, "list");
 };
