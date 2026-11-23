@@ -21,6 +21,12 @@
 #include <unistd.h>
 
 static int nxlink_sock = -1;
+static int switube_romfs_exited = 0;
+
+void switube_mark_romfs_exited(void)
+{
+    switube_romfs_exited = 1;
+}
 
 void userAppInit()
 {
@@ -73,7 +79,8 @@ void userAppExit()
     // system font
     plExit();
 
-    romfsExit();
+    if (!switube_romfs_exited)
+        romfsExit();
 
     if (nxlink_sock != -1)
         close(nxlink_sock);

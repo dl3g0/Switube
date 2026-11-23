@@ -914,11 +914,21 @@ void LibraryTab::refresh() {
     for (size_t i = startIdx; i < favorites.size(); ++i) {
       const auto& track = favorites[i];
       auto* row = new swui::TrackRow();
-      row->setTrack(track, i, [i]() {
+      row->setTrack(track, i, [trackId = track.id, i]() {
         auto allFavs = switube::YtEngine::getInstance().getFavorites();
-        if (i < allFavs.size()) {
+        if (allFavs.empty()) return;
+        size_t idx = (i < allFavs.size() && allFavs[i].id == trackId) ? i : allFavs.size();
+        if (idx == allFavs.size()) {
+          for (size_t k = 0; k < allFavs.size(); ++k) {
+            if (allFavs[k].id == trackId) {
+              idx = k;
+              break;
+            }
+          }
+        }
+        if (idx < allFavs.size()) {
           auto& eng = switube::YtEngine::getInstance();
-          eng.playQueueWithMode(allFavs, i, eng.isShuffle());
+          eng.playQueueWithMode(allFavs, idx, eng.isShuffle());
         }
       });
       row->getFocusEvent()->subscribe([this, i](brls::View*) {

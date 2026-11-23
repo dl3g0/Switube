@@ -18,6 +18,7 @@
 #include "playback_shortcuts.hpp"
 #include "ui_helpers.hpp"
 #include "i18n.hpp"
+#include "thread_helper.hpp"
 #include "update.hpp"
 
 class MainActivity : public brls::Activity {
@@ -165,8 +166,12 @@ int main(int argc, char* argv[]) {
   }
 
   nxlog::push("Exiting mainLoop...");
+  switube::requestAppShutdown();
   switube::YtEngine::getInstance().shutdown();
   swui::shutdownRemoteImages();
+  switube::waitForWorkers(2000);
+  curl_global_cleanup();
+  swplatform::shutdown();
   swplatform::preventSleep(false);
   switube::update::applyPending();
 

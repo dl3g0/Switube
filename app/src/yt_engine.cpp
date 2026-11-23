@@ -114,6 +114,10 @@ bool YtEngine::init() {
 
 void YtEngine::shutdown() {
   isRunning_ = false;
+  {
+    std::lock_guard<std::recursive_mutex> lock(dataMutex_);
+    observers_.clear();
+  }
   YtAudioPlayer::getInstance().shutdown();
   saveFavorites();
   saveUserPlaylists();
@@ -202,7 +206,12 @@ void YtEngine::playQueue(const std::vector<YtTrack>& tracks, size_t startIndex) 
 
 void YtEngine::playQueueShuffled(const std::vector<YtTrack>& tracks) {
   if (tracks.empty()) return;
-  playQueueWithMode(tracks, 0, true);
+  std::random_device rd;
+  uint64_t seed = static_cast<uint64_t>(rd()) ^
+                  static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+  std::mt19937 rng(static_cast<uint32_t>(seed ^ (seed >> 32)));
+  std::uniform_int_distribution<size_t> dist(0, tracks.size() - 1);
+  playQueueWithMode(tracks, dist(rng), true);
 }
 
 void YtEngine::playQueueWithMode(const std::vector<YtTrack>& tracks, size_t startIndex, bool shuffled) {
@@ -214,16 +223,15 @@ void YtEngine::playQueueWithMode(const std::vector<YtTrack>& tracks, size_t star
     shuffle_.store(shuffled);
     if (shuffled) {
       queue_ = tracks;
-      std::mt19937 rng(static_cast<uint32_t>(
-          std::chrono::steady_clock::now().time_since_epoch().count()));
       if (startIndex > 0) {
-        // Poner la pista seleccionada primero y mezclar el resto
         std::swap(queue_[0], queue_[startIndex]);
-        if (queue_.size() > 2) {
-          std::shuffle(queue_.begin() + 1, queue_.end(), rng);
-        }
-      } else {
-        std::shuffle(queue_.begin(), queue_.end(), rng);
+      }
+      if (queue_.size() > 2) {
+        std::random_device rd;
+        uint64_t seed = static_cast<uint64_t>(rd()) ^
+                        static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+        std::mt19937 rng(static_cast<uint32_t>(seed ^ (seed >> 32)));
+        std::shuffle(queue_.begin() + 1, queue_.end(), rng);
       }
       startIndex = 0;
     } else {

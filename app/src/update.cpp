@@ -35,6 +35,10 @@
 
 using json = nlohmann::json;
 
+#ifdef __SWITCH__
+extern "C" void switube_mark_romfs_exited(void);
+#endif
+
 namespace switube::update {
 namespace {
 
@@ -710,7 +714,12 @@ bool restartNow() {
     nxlog::push("[update] loader cannot relaunch us");
     return false;
   }
-  envSetNextLoad(selfNro.c_str(), selfNro.c_str());
+  std::string quotedArg = "\"" + selfNro + "\"";
+  Result rc = envSetNextLoad(selfNro.c_str(), quotedArg.c_str());
+  if (R_FAILED(rc)) {
+    nxlog::pushf("[update] envSetNextLoad failed: 0x%x", rc);
+    return false;
+  }
   brls::Application::quit();
   return true;
 #else
@@ -723,8 +732,9 @@ void applyPending() {
   if (src.empty() || !hasPending()) return;
 
 #ifdef __SWITCH__
-  // Desmontar romfs antes de renombrar el .nro en ejecución.
+  // Desmontar romfs una sola vez antes de renombrar el .nro en ejecución.
   romfsExit();
+  switube_mark_romfs_exited();
 #endif
 
   std::string bak = selfNro + ".old";

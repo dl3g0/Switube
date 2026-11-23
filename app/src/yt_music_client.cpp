@@ -38,12 +38,23 @@ inline std::string upgradeThumbnailUrl(const std::string& rawUrl, int targetSize
 #include <nlohmann/json.hpp>
 
 #include "NXConsoleLog.h"
+#include "thread_helper.hpp"
 
 using json = nlohmann::json;
 
 namespace switube {
 
 namespace {
+
+int CurlShutdownProgress(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+  return isAppShuttingDown() ? 1 : 0;
+}
+
+void attachShutdownAbort(CURL* curl) {
+  if (!curl) return;
+  curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlShutdownProgress);
+}
 
 size_t CurlWriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
   size_t totalSize = size * nmemb;
@@ -489,6 +500,7 @@ void YtMusicClient::ensureVisitorData() {
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseStr);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+  attachShutdownAbort(curl);
 
   nxlog::push("ensureVisitorData: fetching fresh visitorData from sw.js_data...");
   CURLcode res = curl_easy_perform(curl);
@@ -606,6 +618,7 @@ std::string YtMusicClient::postInnerTube(const std::string& endpoint,
 
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+  attachShutdownAbort(curl);
 
   nxlog::pushf("postInnerTube: performing POST to %s...", endpoint.c_str());
   const CURLcode res = curl_easy_perform(curl);
@@ -1953,6 +1966,7 @@ std::string performFormPost(const std::string& url, const std::string& formBody)
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseStr);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+  attachShutdownAbort(curl);
 
   CURLcode res = curl_easy_perform(curl);
   curl_slist_free_all(headers);
